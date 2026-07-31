@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ios-archive:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build unsigned iOS archive
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          xcodebuild archive \
+            -project HyperMetaAI.xcodeproj \
+            -scheme HyperMetaAI \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "build/release/HyperMetaAI-${version}.xcarchive" \
+            -derivedDataPath build/release/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION="$version" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+
+          mkdir -p build/release/assets
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/release/HyperMetaAI-${version}.xcarchive/Products/Applications/HyperMetaAI.app" \
+            "build/release/assets/HyperMetaAI-iOS-${version}-unsigned.zip"
+
+      - name: Upload iOS release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HyperMetaAI-ios-release
+          path: build/release/assets/HyperMetaAI-iOS-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: ios-archive
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download iOS release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: HyperMetaAI-ios-release
+          path: release-assets
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Hyper Meta AI ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            --verify-tag

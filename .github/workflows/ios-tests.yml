@@ -1,0 +1,52 @@
+name: iOS Tests
+
+on:
+  push:
+    paths:
+      - "HyperMetaAI/**"
+      - "HyperMetaAITests/**"
+      - "HyperMetaAIUITests/**"
+      - "HyperMetaAI.xcodeproj/**"
+      - "Scripts/**"
+      - ".github/workflows/ios-tests.yml"
+  pull_request:
+    paths:
+      - "HyperMetaAI/**"
+      - "HyperMetaAITests/**"
+      - "HyperMetaAIUITests/**"
+      - "HyperMetaAI.xcodeproj/**"
+      - "Scripts/**"
+      - ".github/workflows/ios-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  simulator-tests:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      # The simulator has no paired glasses. These tests exercise the mock DAT
+      # device and keep the required CI signal deterministic.
+      ONLY_TESTING: HyperMetaAITests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Run iOS simulator tests
+        run: ./Scripts/run-ios-tests.sh
+
+      - name: Upload xcresult
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: HyperMetaAI-xcresult
+          path: build/test-results/HyperMetaAI.xcresult
+          if-no-files-found: warn

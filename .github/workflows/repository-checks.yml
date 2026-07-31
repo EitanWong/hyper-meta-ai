@@ -1,0 +1,43 @@
+name: Repository Checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-and-scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Check required documentation and assets
+        run: |
+          test -s README.md
+          test -s README_EN.md
+          test -s ROADMAP.md
+          test -s ROADMAP_EN.md
+          test -f LICENSE
+          test -f rayban.png
+          test -f HyperMetaAI/Assets.xcassets/AppIcon.appiconset/icon_1024x1024.png
+          grep -Fq "https://github.com/Turbo1123/turbometa-rayban-ai" README.md
+          grep -Fq "https://github.com/Turbo1123/turbometa-rayban-ai" README_EN.md
+          grep -Fq "ROADMAP.md" README.md
+          grep -Fq "ROADMAP_EN.md" README_EN.md
+
+      - name: Check shell scripts
+        run: |
+          bash -n Scripts/run-ios-tests.sh
+          bash -n Scripts/profile-ios-video-pipeline.sh
+
+      - name: Check committed whitespace errors
+        run: git diff-tree --check --no-commit-id -r "$GITHUB_SHA"
