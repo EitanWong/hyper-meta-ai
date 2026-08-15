@@ -1290,7 +1290,20 @@ final class DATGlassesAppUpdateRetryGateTests: XCTestCase {
     XCTAssertTrue(
       DATGlassesAppUpdateGuidance.isRequired(for: .datAppOnTheGlassesUpdateRequired)
     )
+    XCTAssertTrue(
+      DATGlassesAppUpdateGuidance.isRequired(
+        for: .unexpectedError(description: "请将直播软件更新至最新版本后重试")
+      )
+    )
+    XCTAssertTrue(
+      DATGlassesAppUpdateGuidance.isRequired(message: "请将直播软件更新至最新版本后重试")
+    )
     XCTAssertFalse(DATGlassesAppUpdateGuidance.isRequired(for: .dwaUnavailable))
+    XCTAssertFalse(
+      DATGlassesAppUpdateGuidance.isRequired(
+        for: .unexpectedError(description: "Temporary connection failure")
+      )
+    )
     XCTAssertFalse(DATGlassesAppUpdateGuidance.isRequired(for: .sessionAlreadyStopped))
   }
 

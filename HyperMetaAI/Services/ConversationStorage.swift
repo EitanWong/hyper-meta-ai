@@ -8,17 +8,22 @@ import Foundation
 class ConversationStorage {
     static let shared = ConversationStorage()
 
-    private let userDefaults = UserDefaults.standard
+    private let userDefaults: UserDefaults
     private let conversationsKey = "savedConversations"
     private let maxConversations = 100 // 最多保存100条对话
 
-    private init() {}
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+    }
 
     // MARK: - Save Conversation
 
     func saveConversation(_ record: ConversationRecord) {
         do {
             var conversations = try decodeStoredConversations()
+
+            // 同 ID 记录已存在时先移除（覆盖更新：继续同一会话落盘不产生重复条目）
+            conversations.removeAll { $0.id == record.id }
 
             // Add new conversation at the beginning
             conversations.insert(record, at: 0)
@@ -76,6 +81,25 @@ class ConversationStorage {
             print("🗑️ [Storage] 删除对话成功: \(id)")
         } catch {
             print("❌ [Storage] 删除对话失败，保留现有记录: \(error.localizedDescription)")
+        }
+    }
+
+    /// 删除指定 Agent 的全部会话记录；返回删除条数
+    @discardableResult
+    func deleteConversations(for agentName: String) -> Int {
+        do {
+            var conversations = try decodeStoredConversations()
+            let before = conversations.count
+            conversations.removeAll { $0.aiModel == agentName }
+            let removed = before - conversations.count
+            guard removed > 0 else { return 0 }
+            let encoded = try JSONEncoder().encode(conversations)
+            userDefaults.set(encoded, forKey: conversationsKey)
+            print("🗑️ [Storage] 删除 Agent 会话成功: \(agentName), \(removed) 条")
+            return removed
+        } catch {
+            print("❌ [Storage] 删除 Agent 会话失败，保留现有记录: \(error.localizedDescription)")
+            return 0
         }
     }
 

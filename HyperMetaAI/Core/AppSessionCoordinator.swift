@@ -47,6 +47,11 @@ final class AppSessionCoordinator: ObservableObject {
         nodeId: openClawService.nodeIdentifier
       )
     )
+    streamViewModel.onDeviceAvailable = { [weak self] in
+      Task { @MainActor in
+        await AgentConnectGreetingAnnouncer.shared.handleDeviceConnected()
+      }
+    }
     configuredStreamViewModelID = streamViewModelID
     reconnectOpenClawIfNeeded()
   }

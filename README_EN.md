@@ -47,8 +47,10 @@ Open `HyperMetaAI.xcodeproj` in Xcode and configure your Apple Developer Team, M
 - `repository-checks.yml`: documentation, assets, scripts, and commit-format checks.
 - `ios-tests.yml`: run iOS unit tests on a macOS simulator and upload `.xcresult`.
 - `release.yml`: build an iOS archive and create a GitHub Release for `v*.*.*` tags.
+- `testflight.yml`: manual TestFlight upload (requires signing and App Store Connect API key secrets; see `docs/testflight-plan.md`).
 
-App Store and TestFlight delivery will follow signing, privacy documentation, and real-device regression stability.
+Release plans: `docs/testflight-plan.md` (staged TestFlight testing), `docs/app-store-release-plan.md` (App Store submission),
+`docs/app-store-metadata.md` (metadata drafts), and privacy policy drafts `docs/privacy-policy-zh.md` / `docs/privacy-policy-en.md`.
 
 ## License
 

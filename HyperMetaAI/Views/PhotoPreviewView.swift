@@ -15,6 +15,7 @@
 //
 
 import SwiftUI
+import Photos
 
 struct PhotoPreviewView: View {
   let photo: UIImage
@@ -24,6 +25,7 @@ struct PhotoPreviewView: View {
 
   @State private var showShareSheet = false
   @State private var dragOffset = CGSize.zero
+  @State private var savedToLibrary = false
 
   var body: some View {
     ZStack {
@@ -78,20 +80,40 @@ struct PhotoPreviewView: View {
             }
           }
 
-          // Bottom row: Share
-          Button {
-            showShareSheet = true
-          } label: {
-            HStack {
-              Image(systemName: "square.and.arrow.up")
-              Text(NSLocalizedString("photo.share", comment: "Share"))
-                .fontWeight(.semibold)
+          // Bottom row: Save to Photos + Share
+          HStack(spacing: 12) {
+            Button {
+              saveToPhotoLibrary()
+            } label: {
+              HStack {
+                Image(systemName: savedToLibrary ? "checkmark" : "photo.badge.plus")
+                Text(NSLocalizedString(
+                  savedToLibrary ? "photo.saved" : "photo.save",
+                  comment: "Save to Photos"
+                ))
+                  .fontWeight(.semibold)
+              }
+              .frame(maxWidth: .infinity)
+              .padding()
+              .background(savedToLibrary ? Color.green.opacity(0.8) : Color.gray.opacity(0.8))
+              .foregroundColor(.white)
+              .cornerRadius(12)
             }
-            .frame(maxWidth: .infinity)
-            .padding()
-            .background(Color.gray.opacity(0.8))
-            .foregroundColor(.white)
-            .cornerRadius(12)
+
+            Button {
+              showShareSheet = true
+            } label: {
+              HStack {
+                Image(systemName: "square.and.arrow.up")
+                Text(NSLocalizedString("photo.share", comment: "Share"))
+                  .fontWeight(.semibold)
+              }
+              .frame(maxWidth: .infinity)
+              .padding()
+              .background(Color.gray.opacity(0.8))
+              .foregroundColor(.white)
+              .cornerRadius(12)
+            }
           }
         }
         .padding(.horizontal, 40)
@@ -138,6 +160,20 @@ struct PhotoPreviewView: View {
     Task {
       try? await Task.sleep(nanoseconds: 300_000_000)
       onDismiss()
+    }
+  }
+
+  private func saveToPhotoLibrary() {
+    guard !savedToLibrary else { return }
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+      guard status == .authorized || status == .limited else { return }
+      PHPhotoLibrary.shared().performChanges {
+        PHAssetChangeRequest.creationRequestForAsset(from: photo)
+      } completionHandler: { success, _ in
+        DispatchQueue.main.async {
+          if success { savedToLibrary = true }
+        }
+      }
     }
   }
 }

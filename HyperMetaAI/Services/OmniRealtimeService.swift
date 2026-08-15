@@ -154,7 +154,9 @@ class OmniRealtimeService: NSObject {
 
     // Configuration
     private let apiKey: String
-    private let model = "qwen3-omni-flash-realtime"
+    /// 直连 DashScope 的 Realtime 模型（默认 Omni 家族最新模型，保证多模态传图可用；
+    /// 用户选了 Audio 家族时仍回退 Omni 默认，避免纯语音模型丢失图像输入）
+    private let model: String
     // 根据用户设置的区域动态获取 WebSocket URL（北京/新加坡）
     private var baseURL: String {
         return APIProviderManager.staticLiveAIWebsocketURL
@@ -213,8 +215,9 @@ class OmniRealtimeService: NSObject {
     private var responseAudioDebugState = OmniResponseAudioDebugState()
     #endif
 
-    init(apiKey: String) {
+    init(apiKey: String, model: String = QwenRealtimeModelCatalog.resolveForFamily(.omni).id) {
         self.apiKey = apiKey
+        self.model = model
         super.init()
     }
 

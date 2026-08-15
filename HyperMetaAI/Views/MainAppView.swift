@@ -23,8 +23,6 @@ struct MainAppView: View {
   @ObservedObject private var viewModel: WearablesViewModel
   @StateObject private var streamViewModel: StreamSessionViewModel
   @StateObject private var sessionCoordinator = AppSessionCoordinator()
-  @State private var permissionsGranted = false
-  @State private var hasCheckedPermissions = false
 
   init(wearables: WearablesInterface, viewModel: WearablesViewModel) {
     self.wearables = wearables
@@ -34,39 +32,34 @@ struct MainAppView: View {
 
   var body: some View {
     Group {
-      if viewModel.registrationState == .registered {
-        // 已注册/连接设备
-        if !hasCheckedPermissions {
-          // 首次启动，请求权限
-          PermissionsRequestView { granted in
-            permissionsGranted = granted
-            hasCheckedPermissions = true
-          }
-        } else {
-          // 权限已检查，显示主界面
-          MainTabView(streamViewModel: streamViewModel, wearablesViewModel: viewModel)
-            .onAppear {
-              sessionCoordinator.configure(streamViewModel: streamViewModel)
-            }
-            .onChange(of: scenePhase) { _, phase in
-              Task { @MainActor in
-                switch phase {
-                case .background:
-                  await streamViewModel.suspendForBackground()
-                case .active:
-                  streamViewModel.resumeAfterForeground()
-                case .inactive:
-                  break
-                @unknown default:
-                  break
-                }
-              }
-            }
+      MainTabView(streamViewModel: streamViewModel, wearablesViewModel: viewModel)
+        .onAppear {
+          sessionCoordinator.configure(streamViewModel: streamViewModel)
+          VoiceAssistantRouter.shared.startObservingControlRequests()
+          AgentReminderTapCoordinator.startObserving()
+          AgentCalendarCountdownCoordinator.startObserving()
+          AgentBriefingControlCoordinator.startObserving()
+          AgentTaskControlCoordinator.startObserving()
+          AgentTaskFollowUpCoordinator.startObserving()
+          AgentTaskRetryCoordinator.startObserving()
         }
-      } else {
-        // 未注册 - 显示注册/引导流程
-        HomeScreenView(viewModel: viewModel)
-      }
+        .onChange(of: scenePhase) { _, phase in
+          Task { @MainActor in
+            switch phase {
+            case .background:
+              await streamViewModel.suspendForBackground()
+            case .active:
+              streamViewModel.resumeAfterForeground()
+              VoiceAssistantRouter.shared.consumeControlRequestIfNeeded()
+              AgentReminderCountdownCoordinator.sync()
+              Task { await AgentCalendarCountdownCoordinator.sync() }
+            case .inactive:
+              break
+            @unknown default:
+              break
+            }
+          }
+        }
     }
     .alert(
       streamViewModel.requiresDATGlassesAppUpdate
@@ -93,6 +86,7 @@ struct MainAppView: View {
       Text(streamViewModel.errorMessage)
     }
   }
+
 }
 
 #if DEBUG

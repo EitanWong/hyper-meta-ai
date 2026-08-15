@@ -1,0 +1,86 @@
+name: TestFlight Upload
+
+# 手动触发的 TestFlight 上传（默认不启用）：
+# 需要先在 GitHub 仓库配置 Secrets：
+#   DISTRIBUTION_CERT_BASE64      Distribution 证书 .p12 的 base64
+#   DISTRIBUTION_CERT_PASSWORD    证书密码
+#   ASC_API_KEY_ID                App Store Connect API Key ID
+#   ASC_API_ISSUER_ID             App Store Connect API Issuer ID
+#   ASC_API_KEY                   App Store Connect API Key (.p8 文件内容)
+# 凭据只存在 Secrets 中，不要提交仓库。本工作流只在手动触发时运行，
+# 不影响 push/PR 的 ios-tests.yml 与 release.yml。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "MARKETING_VERSION，例如 1.4.0"
+        required: true
+        type: string
+        default: "1.4.0"
+      build_number:
+        description: "CURRENT_PROJECT_VERSION，必须高于 App Store Connect 上已有构建号"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-upload:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Import signing certificate
+        uses: apple-actions/import-codesigning-certs@v3
+        with:
+          p12-file-base64: ${{ secrets.DISTRIBUTION_CERT_BASE64 }}
+          p12-password: ${{ secrets.DISTRIBUTION_CERT_PASSWORD }}
+
+      - name: Archive with App Store signing
+        env:
+          RELEASE_VERSION: ${{ github.event.inputs.version }}
+          BUILD_NUMBER: ${{ github.event.inputs.build_number }}
+        run: |
+          xcodebuild archive \
+            -project HyperMetaAI.xcodeproj \
+            -scheme HyperMetaAI \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "build/TestFlight/HyperMetaAI.xcarchive" \
+            -derivedDataPath build/TestFlight/DerivedData \
+            MARKETING_VERSION="$RELEASE_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+
+      - name: Export IPA
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/TestFlight/HyperMetaAI.xcarchive \
+            -exportOptionsPlist Scripts/ExportOptions-AppStore.plist \
+            -exportPath build/TestFlight/export
+
+      - name: Install App Store Connect API key
+        run: |
+          mkdir -p "$HOME/.private_keys"
+          printf '%s' "${{ secrets.ASC_API_KEY }}" > \
+            "$HOME/.private_keys/AuthKey_${{ secrets.ASC_API_KEY_ID }}.p8"
+          chmod 600 "$HOME/.private_keys/AuthKey_${{ secrets.ASC_API_KEY_ID }}.p8"
+
+      - name: Upload to TestFlight
+        run: |
+          xcrun altool --upload-app \
+            -f build/TestFlight/export/HyperMetaAI.ipa \
+            -t ios \
+            --apiKey "${{ secrets.ASC_API_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_API_ISSUER_ID }}" \
+            --verbose

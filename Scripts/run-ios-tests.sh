@@ -37,6 +37,15 @@ if [[ -n "${ONLY_TESTING:-}" ]]; then
   command+=("-only-testing:$ONLY_TESTING")
 fi
 
+# Deterministic by default: run test classes serially on one simulator clone.
+# Parallel clones can occasionally wedge the simulator under full-suite load
+# (serial full suite completes in ~25s). Opt in with PARALLEL_TESTING=1.
+if [[ "${PARALLEL_TESTING:-0}" == "1" ]]; then
+  command+=("-parallel-testing-enabled" "YES")
+else
+  command+=("-parallel-testing-enabled" "NO")
+fi
+
 printf 'Running %s tests on %s\n' "$scheme" "$destination"
 "${command[@]}"
 

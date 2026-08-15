@@ -9,44 +9,53 @@ struct MainTabView: View {
     @ObservedObject var streamViewModel: StreamSessionViewModel
     @ObservedObject var wearablesViewModel: WearablesViewModel
 
-    @State private var selectedTab = 0
-
-    // Read API Key from secure storage
-    private var apiKey: String {
-        APIKeyManager.shared.getAPIKey() ?? ""
-    }
+    @ObservedObject private var voiceAssistantRouter = VoiceAssistantRouter.shared
+    @ObservedObject private var navigationRouter = AppNavigationRouter.shared
+    @State private var voiceAssistantRequest: VoiceAssistantRequest?
+    @State private var requestGeneration = UUID()
+    @State private var showAgentHub = false
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            // Home - Feature entry
-            HyperMetaAIHomeView(streamViewModel: streamViewModel, wearablesViewModel: wearablesViewModel, apiKey: apiKey)
-                .tabItem {
-                    Label("tab.home".localized, systemImage: "house.fill")
-                }
-                .tag(0)
-
-            // Records
-            RecordsView()
-                .tabItem {
-                    Label("tab.records".localized, systemImage: "list.bullet.rectangle")
-                }
-                .tag(1)
-
-            // Gallery
-            GalleryView()
-                .tabItem {
-                    Label("tab.gallery".localized, systemImage: "photo.on.rectangle")
-                }
-                .tag(2)
-
-            // Settings
-            SettingsView(streamViewModel: streamViewModel, apiKey: apiKey)
-                .tabItem {
-                    Label("tab.settings".localized, systemImage: "person.fill")
-                }
-                .tag(3)
+        QwenVoiceView(
+            streamViewModel: streamViewModel,
+            wearablesViewModel: wearablesViewModel,
+            initialBrain: voiceAssistantRequest?.brain,
+            initialInstruction: voiceAssistantRequest?.instruction,
+            initialFollowUpContext: voiceAssistantRequest?.followUpContext,
+            isPrimaryExperience: true,
+            startImmediately: voiceAssistantRequest != nil
+        )
+        .id(requestGeneration)
+        .onAppear {
+            consumeVoiceRequest()
+            consumeNavigationRequest()
         }
-        .accentColor(AppColors.primary)
+        .onChange(of: voiceAssistantRouter.isVoiceSessionRequested) { _, _ in
+            consumeVoiceRequest()
+        }
+        .onChange(of: navigationRouter.pendingDestination) { _, _ in
+            consumeNavigationRequest()
+        }
+        .fullScreenCover(isPresented: $showAgentHub) {
+            AgentHubView(streamViewModel: streamViewModel)
+        }
+    }
+
+    private func consumeVoiceRequest() {
+        guard let request = voiceAssistantRouter.consumeVoiceSessionRequest() else { return }
+        voiceAssistantRequest = request
+        requestGeneration = UUID()
+    }
+
+    private func consumeNavigationRequest() {
+        guard let destination = navigationRouter.pendingDestination else { return }
+        switch destination {
+        case .agentHub, .conversation:
+            showAgentHub = true
+            navigationRouter.consume()
+        case .agentSettings, .gallery:
+            break
+        }
   }
 }
 

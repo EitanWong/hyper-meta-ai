@@ -63,7 +63,7 @@ struct StreamView: View {
       VStack {
         Spacer()
         if viewModel.activeTimeLimit.isTimeLimited && viewModel.remainingTime > 0 {
-          Text("Streaming ending in \(viewModel.remainingTime.formattedCountdown)")
+          Text(String(format: "stream.endingIn".localized, viewModel.remainingTime.formattedCountdown))
             .font(.system(size: 15))
             .foregroundColor(.white)
         }
@@ -160,11 +160,11 @@ struct StreamView: View {
           .font(.system(size: 80))
           .foregroundColor(.white.opacity(0.6))
 
-        Text("未连接RayBan Meta眼镜")
+        Text("stream.notConnected".localized)
           .font(AppTypography.title2)
           .foregroundColor(.white)
 
-        Text("请先在首页连接你的智能眼镜，\n然后再使用直播功能")
+        Text("stream.notConnectedHint".localized)
           .font(AppTypography.body)
           .foregroundColor(.white.opacity(0.8))
           .multilineTextAlignment(.center)
@@ -179,7 +179,7 @@ struct StreamView: View {
       } label: {
         HStack(spacing: AppSpacing.sm) {
           Image(systemName: "chevron.left")
-          Text("返回首页")
+          Text("stream.backToHome".localized)
             .font(AppTypography.headline)
         }
         .frame(maxWidth: .infinity)

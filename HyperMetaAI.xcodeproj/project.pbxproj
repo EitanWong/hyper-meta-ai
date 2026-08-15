@@ -72,6 +72,34 @@
 		8FD96B952E6F0F7D00F56AB1 /* MWDATCore in Frameworks */ = {isa = PBXBuildFile; productRef = 8FD96B942E6F0F7D00F56AB1 /* MWDATCore */; };
 		8FD96B952E6F0F7D00F56AB2 /* MWDATCamera in Frameworks */ = {isa = PBXBuildFile; productRef = 8FD96B942E6F0F7D00F56AB2 /* MWDATCamera */; };
 		A5C50340AFD334B459151AF1 /* QuickVisionIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568E19B82D2116C7FE3B1829 /* QuickVisionIntent.swift */; };
+		AG1001000100010001 /* AgentProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2001000100010001 /* AgentProvider.swift */; };
+		AG1002000200020002 /* AgentChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2002000200020002 /* AgentChatView.swift */; };
+		AG1003000300030003 /* AgentHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2003000300030003 /* AgentHubView.swift */; };
+		AG1004000400040004 /* AgentSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2004000400040004 /* AgentSettingsView.swift */; };
+		AG1005000500050005 /* AgentDeviceTrigger.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2005000500050005 /* AgentDeviceTrigger.swift */; };
+		AG1006000600060006 /* AgentTurnStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2006000600060006 /* AgentTurnStateMachine.swift */; };
+		AG1007000700070007 /* AgentDisplayHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2007000700070007 /* AgentDisplayHub.swift */; };
+		AG1008000800080008 /* AgentConversationPersister.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2008000800080008 /* AgentConversationPersister.swift */; };
+		AG1009000900090009 /* AgentToolRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2009000900090009 /* AgentToolRegistry.swift */; };
+		AG100A000A000A000A /* CustomAgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG200A000A000A000A /* CustomAgentService.swift */; };
+		AG100B000B000B000B /* CustomAgentConfigSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG200B000B000B000B /* CustomAgentConfigSheetView.swift */; };
+		AG100C000C000C000C /* AgentShortcutStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG200C000C000C000C /* AgentShortcutStore.swift */; };
+		AG100D000D000D000D /* AgentMemoryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG200D000D000D000D /* AgentMemoryStore.swift */; };
+		AG100E000E000E000E /* AgentMemoryExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG200E000E000E000E /* AgentMemoryExtractor.swift */; };
+		AG100F000F000F000F /* AgentVisionContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG200F000F000F000F /* AgentVisionContext.swift */; };
+		AG1010001000100010 /* VisionOCRService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2010001000100010 /* VisionOCRService.swift */; };
+		AG1011001100110011 /* CustomWebSocketAgentService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2011001100110011 /* CustomWebSocketAgentService.swift */; };
+		AG1012001200120012 /* VisionTranslationPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2012001200120012 /* VisionTranslationPlanner.swift */; };
+		AG1013001300130013 /* VoiceAssistantAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2013001300130013 /* VoiceAssistantAppIntent.swift */; };
+		AG1014001400140014 /* VoiceAssistantRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2014001400140014 /* VoiceAssistantRouter.swift */; };
+		AG1015001500150015 /* AgentListStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2015001500150015 /* AgentListStore.swift */; };
+		AG1016001600160016 /* AgentReminderStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2016001600160016 /* AgentReminderStore.swift */; };
+		AG1017001700170017 /* VisionSceneService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2017001700170017 /* VisionSceneService.swift */; };
+		AG1018001800180018 /* AgentDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2018001800180018 /* AgentDiagnostics.swift */; };
+		AG1019001900190019 /* AgentDiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG2019001900190019 /* AgentDiagnosticsView.swift */; };
+		AG101A001A001A001A /* AgentRuleStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AG201A001A001A001A /* AgentRuleStore.swift */; };
+		AK1000000000000000000001 /* AgentAskAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AK2000000000000000000001 /* AgentAskAppIntent.swift */; };
+		AP1000000000000000000001 /* AgentApprovalControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = AP2000000000000000000001 /* AgentApprovalControlIntent.swift */; };
 		B3F7AF9C18583263BE4D96A1 /* LanguageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0080AFEB87FC4CF85E53FE97 /* LanguageManager.swift */; };
 		B7A4CF23D001000000000001 /* FrameUpdateThrottle.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000002 /* FrameUpdateThrottle.swift */; };
 		B7A4CF23D001000000000003 /* AppIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000004 /* AppIdentity.swift */; };
@@ -85,23 +113,116 @@
 		B7A4CF23D001000000000022 /* RealtimeProviderAudioProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000021 /* RealtimeProviderAudioProfile.swift */; };
 		B7A4CF23D001000000000024 /* RealtimeSessionConfigurationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000023 /* RealtimeSessionConfigurationGate.swift */; };
 		B7A4CF23D001000000000025 /* RealtimeImageUploadPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000026 /* RealtimeImageUploadPipeline.swift */; };
+		B7A4CF23D001000000000030 /* DeviceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000031 /* DeviceUITests.swift */; };
+		BF1000000000000000000001 /* AgentBriefingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF2000000000000000000001 /* AgentBriefingStore.swift */; };
+		BI1000000000000000000001 /* AgentBackgroundTaskInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = BI2000000000000000000001 /* AgentBackgroundTaskInspector.swift */; };
+		CB1000000000000000000001 /* BriefingControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB2000000000000000000001 /* BriefingControl.swift */; };
+		CE10000000000000000001 /* ConversationExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE20000000000000000001 /* ConversationExport.swift */; };
+		CL1000000000000000000001 /* AgentCalendarService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CL2000000000000000000001 /* AgentCalendarService.swift */; };
+		CP10000000000000000001 /* CapturedPhotoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CP20000000000000000001 /* CapturedPhotoStore.swift */; };
+		CT10010001000100010001 /* VoiceSessionControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = CT20010001000100010001 /* VoiceSessionControl.swift */; };
+		CT10020002000200020002 /* VoiceControlIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = CT20020002000200020002 /* VoiceControlIntents.swift */; };
+		CT10030003000300030003 /* VoiceControlRequestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CT20030003000300030003 /* VoiceControlRequestStore.swift */; };
+		CT10040004000400040004 /* VoiceControlRequestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CT20030003000300030003 /* VoiceControlRequestStore.swift */; };
+		CT10050005000500050005 /* HyperMetaAIControls.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = CT20060006000600060006 /* HyperMetaAIControls.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		D01100000000000000000001 /* DouyinLiveModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000001 /* DouyinLiveModels.swift */; };
+		D01100000000000000000002 /* DouyinWebRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000002 /* DouyinWebRuntime.swift */; };
+		D01100000000000000000003 /* DouyinWebcastAPIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000003 /* DouyinWebcastAPIClient.swift */; };
+		D01100000000000000000004 /* DouyinMessageTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000004 /* DouyinMessageTransport.swift */; };
+		D01100000000000000000005 /* DouyinMediaAdapters.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000005 /* DouyinMediaAdapters.swift */; };
+		D01100000000000000000006 /* DouyinLiveCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000006 /* DouyinLiveCoordinator.swift */; };
+		D01100000000000000000007 /* DouyinLiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000007 /* DouyinLiveView.swift */; };
+		D01100000000000000000008 /* DouyinLiveModule.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000008 /* DouyinLiveModule.swift */; };
+		D01100000000000000000009 /* DouyinAuthorizationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D01200000000000000000009 /* DouyinAuthorizationCoordinator.swift */; };
 		D83E4BD577765733E71A0068 /* QuickVisionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B037E0156E90DE2314A9F47 /* QuickVisionView.swift */; };
+		DS0000000000000000000001 /* MWDATDisplay in Frameworks */ = {isa = PBXBuildFile; productRef = DS0000000000000000000002 /* MWDATDisplay */; };
+		FS1000000000000000000001 /* AgentFocusService.swift in Sources */ = {isa = PBXBuildFile; fileRef = FS2000000000000000000001 /* AgentFocusService.swift */; };
+		GC1000000000000000000001 /* AgentConnectGreeting.swift in Sources */ = {isa = PBXBuildFile; fileRef = GC2000000000000000000001 /* AgentConnectGreeting.swift */; };
+		GW10010001000100010001 /* AgentGatewayModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = GW20010001000100010001 /* AgentGatewayModels.swift */; };
+		GW10020002000200020002 /* AgentGatewayCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = GW20020002000200020002 /* AgentGatewayCoordinator.swift */; };
+		GW10030003000300030003 /* AgentGatewayWorkQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = GW20030003000300030003 /* AgentGatewayWorkQueue.swift */; };
+		GW10040004000400040004 /* AgentGatewayResponseGuards.swift in Sources */ = {isa = PBXBuildFile; fileRef = GW20040004000400040004 /* AgentGatewayResponseGuards.swift */; };
+		GW10050005000500050005 /* AgentGatewayAnnouncementWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = GW20050005000500050005 /* AgentGatewayAnnouncementWindow.swift */; };
+		GW10060006000600060006 /* AgentGatewayService.swift in Sources */ = {isa = PBXBuildFile; fileRef = GW20060006000600060006 /* AgentGatewayService.swift */; };
+		HD1000000000000000000001 /* AgentDisplayHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = HD2000000000000000000001 /* AgentDisplayHome.swift */; };
+		HL1000000000000000000001 /* AgentHealthService.swift in Sources */ = {isa = PBXBuildFile; fileRef = HL2000000000000000000001 /* AgentHealthService.swift */; };
+		HM1000000000000000000001 /* AgentHomeKitService.swift in Sources */ = {isa = PBXBuildFile; fileRef = HM2000000000000000000001 /* AgentHomeKitService.swift */; };
+		HM1001000100010001 /* HermesModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = HM2001000100010001 /* HermesModels.swift */; };
+		HM1002000200020002 /* HermesService.swift in Sources */ = {isa = PBXBuildFile; fileRef = HM2002000200020002 /* HermesService.swift */; };
+		HW1001000100010001 /* QwenRealtimeModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = HW2001000100010001 /* QwenRealtimeModelCatalog.swift */; };
+		HW10010001000100010001 /* AgentHomeWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = HW20020002000200020002 /* AgentHomeWidget.swift */; };
+		HW1001000100010002 /* QwenWakeWord.swift in Sources */ = {isa = PBXBuildFile; fileRef = HW2001000100010002 /* QwenWakeWord.swift */; };
 		LT0001000100010001 /* LiveTranslateModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = LT1001000100010001 /* LiveTranslateModels.swift */; };
 		LT0002000200020002 /* LiveTranslateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = LT1002000200020002 /* LiveTranslateService.swift */; };
 		LT0003000300030003 /* LiveTranslateViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = LT1003000300030003 /* LiveTranslateViewModel.swift */; };
 		LT0004000400040004 /* LiveTranslateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LT1004000400040004 /* LiveTranslateView.swift */; };
 		LT0005000500050005 /* LiveTranslateSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = LT1005000500050005 /* LiveTranslateSettingsView.swift */; };
+		LT10010001000100010001 /* LocalToolsAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = LT10020002000200020002 /* LocalToolsAppIntent.swift */; };
+		LW10010001000100010001 /* AgentLiveActivityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20010001000100010001 /* AgentLiveActivityModels.swift */; };
+		LW10020002000200020002 /* AgentLiveActivityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20010001000100010001 /* AgentLiveActivityModels.swift */; };
+		LW10030003000300030003 /* AgentLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20020002000200020002 /* AgentLiveActivityWidget.swift */; };
+		LW10040004000400040004 /* AgentLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20030003000300030003 /* AgentLiveActivityManager.swift */; };
+		MO1001000100010001 /* MetalOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MO2001000100010001 /* MetalOrbView.swift */; };
+		MO1002000200020002 /* AssistantOrb.metal in Sources */ = {isa = PBXBuildFile; fileRef = MO2002000200020002 /* AssistantOrb.metal */; };
+		NB1000000000000000000001 /* AgentNotificationButler.swift in Sources */ = {isa = PBXBuildFile; fileRef = NB2000000000000000000001 /* AgentNotificationButler.swift */; };
+		NR10010001000100010001 /* AppNavigationRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = NR20020002000200020002 /* AppNavigationRouter.swift */; };
 		OC1001000100010001 /* OpenClawModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2001000100010001 /* OpenClawModels.swift */; };
 		OC1002000200020002 /* OpenClawNodeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2002000200020002 /* OpenClawNodeService.swift */; };
 		OC1003000300030003 /* OpenClawCommandRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2003000300030003 /* OpenClawCommandRouter.swift */; };
-		OC1004000400040004 /* OpenClawSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2004000400040004 /* OpenClawSettingsView.swift */; };
 		OC1005000500050005 /* OpenClawDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2005000500050005 /* OpenClawDeviceIdentity.swift */; };
-		OC1006000600060006 /* OpenClawChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2006000600060006 /* OpenClawChatView.swift */; };
 		OC1007000700070007 /* OpenClawASRService.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2007000700070007 /* OpenClawASRService.swift */; };
-		B7A4CF23D001000000000030 /* DeviceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7A4CF23D001000000000031 /* DeviceUITests.swift */; };
+		PS100A000A000A000A /* AgentPersonaStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = PS200A000A000A000A /* AgentPersonaStore.swift */; };
+		QW1001000100010001 /* QwenGatewayModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2001000100010001 /* QwenGatewayModels.swift */; };
+		QW1002000200020002 /* QwenGatewayService.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2002000200020002 /* QwenGatewayService.swift */; };
+		QW1003000300030003 /* QwenVoiceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2003000300030003 /* QwenVoiceSession.swift */; };
+		QW1004000400040004 /* QwenVoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2004000400040004 /* QwenVoiceView.swift */; };
+		QW1005000500050005 /* QwenGatewayConfigSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2005000500050005 /* QwenGatewayConfigSheetView.swift */; };
+		RM1000000000000000000001 /* AgentReminderControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = RM2000000000000000000001 /* AgentReminderControlIntent.swift */; };
+		RS1001000100010001 /* RTMPStreamScenario.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2001000100010001 /* RTMPStreamScenario.swift */; };
+		RS1002000200020002 /* RTMPRecording.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2002000200020002 /* RTMPRecording.swift */; };
+		RS1003000300030003 /* RTMPStreamRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2003000300030003 /* RTMPStreamRecorder.swift */; };
+		RS1004000400040004 /* RTMPLiveScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2004000400040004 /* RTMPLiveScene.swift */; };
+		RS1005000500050005 /* RTMPDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2005000500050005 /* RTMPDiagnostics.swift */; };
+		RS1006000600060006 /* RecordingPlaybackView.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2006000600060006 /* RecordingPlaybackView.swift */; };
+		RS1007000700070007 /* RTMPSceneSuggestion.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2007000700070007 /* RTMPSceneSuggestion.swift */; };
+		RS1008000800080008 /* RTMPParallel.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2008000800080008 /* RTMPParallel.swift */; };
+		RS1009000900090009 /* RTMPLivePermission.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2009000900090009 /* RTMPLivePermission.swift */; };
+		RS100A000A000A000A /* RTMPTitlePolish.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS200A000A000A000A /* RTMPTitlePolish.swift */; };
+		RS100B000B000B000B /* LocalBrainService.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS200B000B000B000B /* LocalBrainService.swift */; };
+		SA10010001000100010001 /* HomeScreenShortcutActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = SA20020002000200020002 /* HomeScreenShortcutActions.swift */; };
+		SC1000000000000000000001 /* SystemSchemaIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = SC2000000000000000000001 /* SystemSchemaIntents.swift */; };
+		SH10010001000100010001 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = SH20010001000100010001 /* ShareViewController.swift */; };
+		SH10020002000200020002 /* AgentShareQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = SH20020002000200020002 /* AgentShareQueue.swift */; };
+		SH10030003000300030003 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 4BA57A882EF8227E002EC214 /* Localizable.strings */; };
+		SH10040004000400040004 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 4BA57AC12EF8227E002EC214 /* Localizable.strings */; };
+		SH10050005000500050005 /* HyperMetaAIShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = SH20060006000600060006 /* HyperMetaAIShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		SI10010001000100010001 /* SpotlightIndexer.swift in Sources */ = {isa = PBXBuildFile; fileRef = SI20020002000200020002 /* SpotlightIndexer.swift */; };
+		SS1001000100010001 /* SimplifiedSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = SS2001000100010001 /* SimplifiedSettingsView.swift */; };
+		TA1000000000000000000001 /* AgentTaskNotificationAction.swift in Sources */ = {isa = PBXBuildFile; fileRef = TA2000000000000000000001 /* AgentTaskNotificationAction.swift */; };
+		TL1001000100010001 /* AgentTaskListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = TL2001000100010001 /* AgentTaskListView.swift */; };
+		TV1000000000000000000001 /* AgentTaskViewControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = TV2000000000000000000001 /* AgentTaskViewControlIntent.swift */; };
+		UR1000000000000000000001 /* AgentURLCommandRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = UR2000000000000000000001 /* AgentURLCommandRouter.swift */; };
+		WS10010001000100010001 /* AgentWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = WS20020002000200020002 /* AgentWidgetSnapshot.swift */; };
+		WT1000000000000000000001 /* AgentWearableTriggerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = WT2000000000000000000001 /* AgentWearableTriggerService.swift */; };
+		WT1000000000000000000002 /* WearableTriggerAppIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = WT2000000000000000000002 /* WearableTriggerAppIntent.swift */; };
+		WT1000000000000000000003 /* AgentWearablesHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = WT2000000000000000000003 /* AgentWearablesHubView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		B7A4CF23D001000000000042 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CCCCCCCCCCCCCCCCCCCCCC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 8A8A8A8A8A8A8A8A8A8A8A8A;
+			remoteInfo = HyperMetaAI;
+		};
+		CT9000000000000000000001 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CCCCCCCCCCCCCCCCCCCCCC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CT4000000000000000000001;
+			remoteInfo = HyperMetaAIControls;
+		};
 		E699CC992E8150670052C240 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CCCCCCCCCCCCCCCCCCCCCC /* Project object */;
@@ -109,12 +230,12 @@
 			remoteGlobalIDString = 8A8A8A8A8A8A8A8A8A8A8A8A;
 			remoteInfo = HyperMetaAI;
 		};
-		B7A4CF23D001000000000042 /* PBXContainerItemProxy */ = {
+		SH9000000000000000000001 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CCCCCCCCCCCCCCCCCCCCCC /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 8A8A8A8A8A8A8A8A8A8A8A8A;
-			remoteInfo = HyperMetaAI;
+			remoteGlobalIDString = SH4000000000000000000001;
+			remoteInfo = HyperMetaAIShare;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -127,6 +248,28 @@
 			files = (
 			);
 			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CT7000000000000000000004 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				CT10050005000500050005 /* HyperMetaAIControls.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		SH7000000000000000000004 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				SH10050005000500050005 /* HyperMetaAIShare.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -202,6 +345,34 @@
 		8FD96B782E6F0A9800F56AB1 /* HyperMetaAI.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HyperMetaAI.entitlements; sourceTree = "<group>"; };
 		8FD96B792E6F0A9800F56AB1 /* HyperMetaAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HyperMetaAIApp.swift; sourceTree = "<group>"; };
 		8FD96B7B2E6F0A9800F56AB1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AG2001000100010001 /* AgentProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProvider.swift; sourceTree = "<group>"; };
+		AG2002000200020002 /* AgentChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatView.swift; sourceTree = "<group>"; };
+		AG2003000300030003 /* AgentHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHubView.swift; sourceTree = "<group>"; };
+		AG2004000400040004 /* AgentSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentSettingsView.swift; sourceTree = "<group>"; };
+		AG2005000500050005 /* AgentDeviceTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDeviceTrigger.swift; sourceTree = "<group>"; };
+		AG2006000600060006 /* AgentTurnStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTurnStateMachine.swift; sourceTree = "<group>"; };
+		AG2007000700070007 /* AgentDisplayHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDisplayHub.swift; sourceTree = "<group>"; };
+		AG2008000800080008 /* AgentConversationPersister.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConversationPersister.swift; sourceTree = "<group>"; };
+		AG2009000900090009 /* AgentToolRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentToolRegistry.swift; sourceTree = "<group>"; };
+		AG200A000A000A000A /* CustomAgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomAgentService.swift; sourceTree = "<group>"; };
+		AG200B000B000B000B /* CustomAgentConfigSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomAgentConfigSheetView.swift; sourceTree = "<group>"; };
+		AG200C000C000C000C /* AgentShortcutStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentShortcutStore.swift; sourceTree = "<group>"; };
+		AG200D000D000D000D /* AgentMemoryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMemoryStore.swift; sourceTree = "<group>"; };
+		AG200E000E000E000E /* AgentMemoryExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentMemoryExtractor.swift; sourceTree = "<group>"; };
+		AG200F000F000F000F /* AgentVisionContext.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentVisionContext.swift; sourceTree = "<group>"; };
+		AG2010001000100010 /* VisionOCRService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionOCRService.swift; sourceTree = "<group>"; };
+		AG2011001100110011 /* CustomWebSocketAgentService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CustomWebSocketAgentService.swift; sourceTree = "<group>"; };
+		AG2012001200120012 /* VisionTranslationPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionTranslationPlanner.swift; sourceTree = "<group>"; };
+		AG2013001300130013 /* VoiceAssistantAppIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceAssistantAppIntent.swift; sourceTree = "<group>"; };
+		AG2014001400140014 /* VoiceAssistantRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = VoiceAssistantRouter.swift; path = Managers/VoiceAssistantRouter.swift; sourceTree = "<group>"; };
+		AG2015001500150015 /* AgentListStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentListStore.swift; sourceTree = "<group>"; };
+		AG2016001600160016 /* AgentReminderStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentReminderStore.swift; sourceTree = "<group>"; };
+		AG2017001700170017 /* VisionSceneService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionSceneService.swift; sourceTree = "<group>"; };
+		AG2018001800180018 /* AgentDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDiagnostics.swift; sourceTree = "<group>"; };
+		AG2019001900190019 /* AgentDiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDiagnosticsView.swift; sourceTree = "<group>"; };
+		AG201A001A001A001A /* AgentRuleStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRuleStore.swift; sourceTree = "<group>"; };
+		AK2000000000000000000001 /* AgentAskAppIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentAskAppIntent.swift; sourceTree = "<group>"; };
+		AP2000000000000000000001 /* AgentApprovalControlIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentApprovalControlIntent.swift; sourceTree = "<group>"; };
 		B7A4CF23D001000000000002 /* FrameUpdateThrottle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameUpdateThrottle.swift; sourceTree = "<group>"; };
 		B7A4CF23D001000000000004 /* AppIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppIdentity.swift; sourceTree = "<group>"; };
 		B7A4CF23D001000000000006 /* AppSessionCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSessionCoordinator.swift; sourceTree = "<group>"; };
@@ -213,24 +384,102 @@
 		B7A4CF23D001000000000021 /* RealtimeProviderAudioProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimeProviderAudioProfile.swift; sourceTree = "<group>"; };
 		B7A4CF23D001000000000023 /* RealtimeSessionConfigurationGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimeSessionConfigurationGate.swift; sourceTree = "<group>"; };
 		B7A4CF23D001000000000026 /* RealtimeImageUploadPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealtimeImageUploadPipeline.swift; sourceTree = "<group>"; };
-		C7F490219E64EC144DAF8A8C /* QuickVisionStorage.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QuickVisionStorage.swift; sourceTree = "<group>"; };
-		CA3E36CE337855A7F17F2AC8 /* QuickVisionService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QuickVisionService.swift; sourceTree = "<group>"; };
-		DC72379319F7F8AAF8019018 /* LiveAIManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveAIManager.swift; path = Managers/LiveAIManager.swift; sourceTree = "<group>"; };
-		E699CC952E8150670052C240 /* HyperMetaAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HyperMetaAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B7A4CF23D001000000000031 /* DeviceUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceUITests.swift; sourceTree = "<group>"; };
 		B7A4CF23D001000000000038 /* HyperMetaAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HyperMetaAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF2000000000000000000001 /* AgentBriefingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBriefingStore.swift; sourceTree = "<group>"; };
+		BI2000000000000000000001 /* AgentBackgroundTaskInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBackgroundTaskInspector.swift; sourceTree = "<group>"; };
+		C7F490219E64EC144DAF8A8C /* QuickVisionStorage.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QuickVisionStorage.swift; sourceTree = "<group>"; };
+		CA3E36CE337855A7F17F2AC8 /* QuickVisionService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QuickVisionService.swift; sourceTree = "<group>"; };
+		CB2000000000000000000001 /* BriefingControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BriefingControl.swift; sourceTree = "<group>"; };
+		CE20000000000000000001 /* ConversationExport.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConversationExport.swift; sourceTree = "<group>"; };
+		CL2000000000000000000001 /* AgentCalendarService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCalendarService.swift; sourceTree = "<group>"; };
+		CP20000000000000000001 /* CapturedPhotoStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CapturedPhotoStore.swift; sourceTree = "<group>"; };
+		CT20010001000100010001 /* VoiceSessionControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceSessionControl.swift; sourceTree = "<group>"; };
+		CT20020002000200020002 /* VoiceControlIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceControlIntents.swift; sourceTree = "<group>"; };
+		CT20030003000300030003 /* VoiceControlRequestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceControlRequestStore.swift; sourceTree = "<group>"; };
+		CT20040004000400040004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		CT20050005000500050005 /* HyperMetaAIControls.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HyperMetaAIControls.entitlements; sourceTree = "<group>"; };
+		CT20060006000600060006 /* HyperMetaAIControls.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HyperMetaAIControls.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		D01200000000000000000001 /* DouyinLiveModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinLiveModels.swift; sourceTree = "<group>"; };
+		D01200000000000000000002 /* DouyinWebRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinWebRuntime.swift; sourceTree = "<group>"; };
+		D01200000000000000000003 /* DouyinWebcastAPIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinWebcastAPIClient.swift; sourceTree = "<group>"; };
+		D01200000000000000000004 /* DouyinMessageTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinMessageTransport.swift; sourceTree = "<group>"; };
+		D01200000000000000000005 /* DouyinMediaAdapters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinMediaAdapters.swift; sourceTree = "<group>"; };
+		D01200000000000000000006 /* DouyinLiveCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinLiveCoordinator.swift; sourceTree = "<group>"; };
+		D01200000000000000000007 /* DouyinLiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinLiveView.swift; sourceTree = "<group>"; };
+		D01200000000000000000008 /* DouyinLiveModule.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinLiveModule.swift; sourceTree = "<group>"; };
+		D01200000000000000000009 /* DouyinAuthorizationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DouyinAuthorizationCoordinator.swift; sourceTree = "<group>"; };
+		DC72379319F7F8AAF8019018 /* LiveAIManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LiveAIManager.swift; path = Managers/LiveAIManager.swift; sourceTree = "<group>"; };
+		E699CC952E8150670052C240 /* HyperMetaAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HyperMetaAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		FS2000000000000000000001 /* AgentFocusService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentFocusService.swift; sourceTree = "<group>"; };
+		GC2000000000000000000001 /* AgentConnectGreeting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentConnectGreeting.swift; sourceTree = "<group>"; };
+		GW20010001000100010001 /* AgentGatewayModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentGatewayModels.swift; sourceTree = "<group>"; };
+		GW20020002000200020002 /* AgentGatewayCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentGatewayCoordinator.swift; sourceTree = "<group>"; };
+		GW20030003000300030003 /* AgentGatewayWorkQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentGatewayWorkQueue.swift; sourceTree = "<group>"; };
+		GW20040004000400040004 /* AgentGatewayResponseGuards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentGatewayResponseGuards.swift; sourceTree = "<group>"; };
+		GW20050005000500050005 /* AgentGatewayAnnouncementWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentGatewayAnnouncementWindow.swift; sourceTree = "<group>"; };
+		GW20060006000600060006 /* AgentGatewayService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentGatewayService.swift; sourceTree = "<group>"; };
+		HD2000000000000000000001 /* AgentDisplayHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentDisplayHome.swift; sourceTree = "<group>"; };
+		HL2000000000000000000001 /* AgentHealthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHealthService.swift; sourceTree = "<group>"; };
+		HM2000000000000000000001 /* AgentHomeKitService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHomeKitService.swift; sourceTree = "<group>"; };
+		HM2001000100010001 /* HermesModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesModels.swift; sourceTree = "<group>"; };
+		HM2002000200020002 /* HermesService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HermesService.swift; sourceTree = "<group>"; };
+		HW2001000100010001 /* QwenRealtimeModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenRealtimeModelCatalog.swift; sourceTree = "<group>"; };
+		HW2001000100010002 /* QwenWakeWord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenWakeWord.swift; sourceTree = "<group>"; };
+		HW20020002000200020002 /* AgentHomeWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHomeWidget.swift; sourceTree = "<group>"; };
 		LT1001000100010001 /* LiveTranslateModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslateModels.swift; sourceTree = "<group>"; };
 		LT1002000200020002 /* LiveTranslateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslateService.swift; sourceTree = "<group>"; };
+		LT10020002000200020002 /* LocalToolsAppIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalToolsAppIntent.swift; sourceTree = "<group>"; };
 		LT1003000300030003 /* LiveTranslateViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslateViewModel.swift; sourceTree = "<group>"; };
 		LT1004000400040004 /* LiveTranslateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslateView.swift; sourceTree = "<group>"; };
 		LT1005000500050005 /* LiveTranslateSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTranslateSettingsView.swift; sourceTree = "<group>"; };
+		LW20010001000100010001 /* AgentLiveActivityModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityModels.swift; sourceTree = "<group>"; };
+		LW20020002000200020002 /* AgentLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityWidget.swift; sourceTree = "<group>"; };
+		LW20030003000300030003 /* AgentLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityManager.swift; sourceTree = "<group>"; };
+		MO2001000100010001 /* MetalOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetalOrbView.swift; sourceTree = "<group>"; };
+		MO2002000200020002 /* AssistantOrb.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = AssistantOrb.metal; sourceTree = "<group>"; };
+		NB2000000000000000000001 /* AgentNotificationButler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationButler.swift; sourceTree = "<group>"; };
+		NR20020002000200020002 /* AppNavigationRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppNavigationRouter.swift; path = Managers/AppNavigationRouter.swift; sourceTree = "<group>"; };
 		OC2001000100010001 /* OpenClawModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawModels.swift; sourceTree = "<group>"; };
 		OC2002000200020002 /* OpenClawNodeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawNodeService.swift; sourceTree = "<group>"; };
 		OC2003000300030003 /* OpenClawCommandRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawCommandRouter.swift; sourceTree = "<group>"; };
-		OC2004000400040004 /* OpenClawSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawSettingsView.swift; sourceTree = "<group>"; };
 		OC2005000500050005 /* OpenClawDeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawDeviceIdentity.swift; sourceTree = "<group>"; };
-		OC2006000600060006 /* OpenClawChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawChatView.swift; sourceTree = "<group>"; };
 		OC2007000700070007 /* OpenClawASRService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawASRService.swift; sourceTree = "<group>"; };
+		PS200A000A000A000A /* AgentPersonaStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentPersonaStore.swift; sourceTree = "<group>"; };
+		QW2001000100010001 /* QwenGatewayModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenGatewayModels.swift; sourceTree = "<group>"; };
+		QW2002000200020002 /* QwenGatewayService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenGatewayService.swift; sourceTree = "<group>"; };
+		QW2003000300030003 /* QwenVoiceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenVoiceSession.swift; sourceTree = "<group>"; };
+		QW2004000400040004 /* QwenVoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenVoiceView.swift; sourceTree = "<group>"; };
+		QW2005000500050005 /* QwenGatewayConfigSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenGatewayConfigSheetView.swift; sourceTree = "<group>"; };
+		RM2000000000000000000001 /* AgentReminderControlIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentReminderControlIntent.swift; sourceTree = "<group>"; };
+		RS2001000100010001 /* RTMPStreamScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPStreamScenario.swift; sourceTree = "<group>"; };
+		RS2002000200020002 /* RTMPRecording.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPRecording.swift; sourceTree = "<group>"; };
+		RS2003000300030003 /* RTMPStreamRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPStreamRecorder.swift; sourceTree = "<group>"; };
+		RS2004000400040004 /* RTMPLiveScene.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPLiveScene.swift; sourceTree = "<group>"; };
+		RS2005000500050005 /* RTMPDiagnostics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPDiagnostics.swift; sourceTree = "<group>"; };
+		RS2006000600060006 /* RecordingPlaybackView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingPlaybackView.swift; sourceTree = "<group>"; };
+		RS2007000700070007 /* RTMPSceneSuggestion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPSceneSuggestion.swift; sourceTree = "<group>"; };
+		RS2008000800080008 /* RTMPParallel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPParallel.swift; sourceTree = "<group>"; };
+		RS2009000900090009 /* RTMPLivePermission.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPLivePermission.swift; sourceTree = "<group>"; };
+		RS200A000A000A000A /* RTMPTitlePolish.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPTitlePolish.swift; sourceTree = "<group>"; };
+		RS200B000B000B000B /* LocalBrainService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalBrainService.swift; sourceTree = "<group>"; };
+		SA20020002000200020002 /* HomeScreenShortcutActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = HomeScreenShortcutActions.swift; path = Managers/HomeScreenShortcutActions.swift; sourceTree = "<group>"; };
+		SC2000000000000000000001 /* SystemSchemaIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemSchemaIntents.swift; sourceTree = "<group>"; };
+		SH20010001000100010001 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
+		SH20020002000200020002 /* AgentShareQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentShareQueue.swift; sourceTree = "<group>"; };
+		SH20040004000400040004 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		SH20050005000500050005 /* HyperMetaAIShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = HyperMetaAIShare.entitlements; sourceTree = "<group>"; };
+		SH20060006000600060006 /* HyperMetaAIShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HyperMetaAIShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		SI20020002000200020002 /* SpotlightIndexer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpotlightIndexer.swift; sourceTree = "<group>"; };
+		SS2001000100010001 /* SimplifiedSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimplifiedSettingsView.swift; sourceTree = "<group>"; };
+		TA2000000000000000000001 /* AgentTaskNotificationAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTaskNotificationAction.swift; sourceTree = "<group>"; };
+		TL2001000100010001 /* AgentTaskListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTaskListView.swift; sourceTree = "<group>"; };
+		TV2000000000000000000001 /* AgentTaskViewControlIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentTaskViewControlIntent.swift; sourceTree = "<group>"; };
+		UR2000000000000000000001 /* AgentURLCommandRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentURLCommandRouter.swift; sourceTree = "<group>"; };
+		WS20020002000200020002 /* AgentWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWidgetSnapshot.swift; sourceTree = "<group>"; };
+		WT2000000000000000000001 /* AgentWearableTriggerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWearableTriggerService.swift; sourceTree = "<group>"; };
+		WT2000000000000000000002 /* WearableTriggerAppIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WearableTriggerAppIntent.swift; sourceTree = "<group>"; };
+		WT2000000000000000000003 /* AgentWearablesHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentWearablesHubView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -244,6 +493,7 @@
 			files = (
 				8FD96B952E6F0F7D00F56AB1 /* MWDATCore in Frameworks */,
 				8FD96B952E6F0F7D00F56AB2 /* MWDATCamera in Frameworks */,
+				DS0000000000000000000001 /* MWDATDisplay in Frameworks */,
 				4B69CCCA2F050E0000D1D025 /* HaishinKit in Frameworks */,
 				4B69CCCC2F050E0000D1D025 /* RTMPHaishinKit in Frameworks */,
 			);
@@ -264,6 +514,20 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CT7000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		SH7000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -275,6 +539,9 @@
 				1111827A1CF7A278A6DC6934 /* APIProviderManager.swift */,
 				51A08DC107E5A57DDE6036C3 /* QuickVisionModeManager.swift */,
 				DC72379319F7F8AAF8019018 /* LiveAIManager.swift */,
+				AG2014001400140014 /* VoiceAssistantRouter.swift */,
+				SA20020002000200020002 /* HomeScreenShortcutActions.swift */,
+				NR20020002000200020002 /* AppNavigationRouter.swift */,
 			);
 			name = Managers;
 			sourceTree = "<group>";
@@ -284,6 +551,11 @@
 			children = (
 				568E19B82D2116C7FE3B1829 /* QuickVisionIntent.swift */,
 				5C0ECA1D14EBBE33F66EEF18 /* LiveAIIntent.swift */,
+				WT2000000000000000000002 /* WearableTriggerAppIntent.swift */,
+				AG2013001300130013 /* VoiceAssistantAppIntent.swift */,
+				LT10020002000200020002 /* LocalToolsAppIntent.swift */,
+				AK2000000000000000000001 /* AgentAskAppIntent.swift */,
+				SC2000000000000000000001 /* SystemSchemaIntents.swift */,
 			);
 			path = Intents;
 			sourceTree = "<group>";
@@ -312,8 +584,24 @@
 			isa = PBXGroup;
 			children = (
 				OC3000000000000000 /* OpenClaw */,
+				HM3000000000000000 /* Hermes */,
+				AG3000000000000000 /* Agents */,
+				GW3000000000000000 /* Gateway */,
+				SI3000000000000000 /* Indexing */,
+				QW3000000000000000 /* Qwen */,
 				4B69CCC62F050D5D00D1D025 /* RTMPStreamingService.swift */,
+				RS2001000100010001 /* RTMPStreamScenario.swift */,
+				RS2002000200020002 /* RTMPRecording.swift */,
+				RS2003000300030003 /* RTMPStreamRecorder.swift */,
+				RS2004000400040004 /* RTMPLiveScene.swift */,
+				RS2005000500050005 /* RTMPDiagnostics.swift */,
+				RS2007000700070007 /* RTMPSceneSuggestion.swift */,
+				RS2008000800080008 /* RTMPParallel.swift */,
+				RS2009000900090009 /* RTMPLivePermission.swift */,
+				RS200A000A000A000A /* RTMPTitlePolish.swift */,
+				RS200B000B000B000B /* LocalBrainService.swift */,
 				4BA57A8D2EF8227E002EC214 /* ConversationStorage.swift */,
+				CE20000000000000000001 /* ConversationExport.swift */,
 				4BA57A8E2EF8227E002EC214 /* LeanEatService.swift */,
 				4BA57A8F2EF8227E002EC214 /* OmniRealtimeService.swift */,
 				4BA57A902EF8227E002EC214 /* VisionAPIConfig.swift */,
@@ -321,6 +609,7 @@
 				069172850B30A2766C8BD4B5 /* TTSService.swift */,
 				CA3E36CE337855A7F17F2AC8 /* QuickVisionService.swift */,
 				63EB4C91D8E0C8AC944DF95A /* GeminiLiveService.swift */,
+				CP20000000000000000001 /* CapturedPhotoStore.swift */,
 				C7F490219E64EC144DAF8A8C /* QuickVisionStorage.swift */,
 				LT1002000200020002 /* LiveTranslateService.swift */,
 			);
@@ -367,6 +656,7 @@
 				4BA57A9F2EF8227E002EC214 /* VisionRecognitionViewModel.swift */,
 				4BA57AA02EF8227E002EC214 /* WearablesViewModel.swift */,
 				LT1003000300030003 /* LiveTranslateViewModel.swift */,
+				QW2003000300030003 /* QwenVoiceSession.swift */,
 			);
 			path = ViewModels;
 			sourceTree = "<group>";
@@ -378,6 +668,8 @@
 				4BA57AA32EF8227E002EC214 /* CircleButton.swift */,
 				4BA57AA42EF8227E002EC214 /* CustomButton.swift */,
 				4BA57AA52EF8227E002EC214 /* MediaPickerView.swift */,
+				MO2002000200020002 /* AssistantOrb.metal */,
+				MO2001000100010001 /* MetalOrbView.swift */,
 				4BA57AA62EF8227E002EC214 /* StatusText.swift */,
 			);
 			path = Components;
@@ -398,6 +690,7 @@
 			children = (
 				4BB5DFF22F06C07A00AF7BD0 /* LiveAISettingsView.swift */,
 				4B69CCC22F050D4300D1D025 /* RTMPStreamingView.swift */,
+				RS2006000600060006 /* RecordingPlaybackView.swift */,
 				4BA57AF52EF82400002EC214 /* PermissionsRequestView.swift */,
 				4BA57AA72EF8227E002EC214 /* Components */,
 				4BA57AAB2EF8227E002EC214 /* MockDeviceKit */,
@@ -424,8 +717,16 @@
 				330AF93394A09D97C504F568 /* QuickVisionSettingsView.swift */,
 				LT1004000400040004 /* LiveTranslateView.swift */,
 				LT1005000500050005 /* LiveTranslateSettingsView.swift */,
-				OC2004000400040004 /* OpenClawSettingsView.swift */,
-				OC2006000600060006 /* OpenClawChatView.swift */,
+				AG2002000200020002 /* AgentChatView.swift */,
+				AG2003000300030003 /* AgentHubView.swift */,
+				WT2000000000000000000003 /* AgentWearablesHubView.swift */,
+				AG2004000400040004 /* AgentSettingsView.swift */,
+				TL2001000100010001 /* AgentTaskListView.swift */,
+				QW2004000400040004 /* QwenVoiceView.swift */,
+				QW2005000500050005 /* QwenGatewayConfigSheetView.swift */,
+				SS2001000100010001 /* SimplifiedSettingsView.swift */,
+				AG200B000B000B000B /* CustomAgentConfigSheetView.swift */,
+				AG2019001900190019 /* AgentDiagnosticsView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -442,6 +743,8 @@
 			isa = PBXGroup;
 			children = (
 				8FD96B7D2E6F0A9800F56AB1 /* HyperMetaAI */,
+				SH3000000000000000000001 /* HyperMetaAIShare */,
+				CT3000000000000000000001 /* HyperMetaAIControls */,
 				8F2A14F12DDBCEB900D4E5F2 /* Frameworks */,
 				7A7A7A7A7A7A7A7A7A7A7A7A /* Products */,
 				E699CC962E8150670052C240 /* HyperMetaAITests */,
@@ -449,18 +752,12 @@
 			);
 			sourceTree = "<group>";
 		};
-		B7A4CF23D001000000000032 /* HyperMetaAIUITests */ = {
-			isa = PBXGroup;
-			children = (
-				B7A4CF23D001000000000031 /* DeviceUITests.swift */,
-			);
-			path = HyperMetaAIUITests;
-			sourceTree = "<group>";
-		};
 		7A7A7A7A7A7A7A7A7A7A7A7A /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				3A3A3A3A3A3A3A3A3A3A3A3A /* HyperMetaAI.app */,
+				SH20060006000600060006 /* HyperMetaAIShare.appex */,
+				CT20060006000600060006 /* HyperMetaAIControls.appex */,
 				E699CC952E8150670052C240 /* HyperMetaAITests.xctest */,
 				B7A4CF23D001000000000038 /* HyperMetaAIUITests.xctest */,
 			);
@@ -477,6 +774,7 @@
 		8FD96B7D2E6F0A9800F56AB1 /* HyperMetaAI */ = {
 			isa = PBXGroup;
 			children = (
+				D01300000000000000000001 /* DouyinLive */,
 				4BA57A892EF8227E002EC214 /* en.lproj */,
 				4BA57A8C2EF8227E002EC214 /* Models */,
 				4BA57A922EF8227E002EC214 /* Services */,
@@ -496,6 +794,49 @@
 			path = HyperMetaAI;
 			sourceTree = "<group>";
 		};
+		AG3000000000000000 /* Agents */ = {
+			isa = PBXGroup;
+			children = (
+				AG2001000100010001 /* AgentProvider.swift */,
+				PS200A000A000A000A /* AgentPersonaStore.swift */,
+				AG2005000500050005 /* AgentDeviceTrigger.swift */,
+				AG2006000600060006 /* AgentTurnStateMachine.swift */,
+				AG2007000700070007 /* AgentDisplayHub.swift */,
+				HD2000000000000000000001 /* AgentDisplayHome.swift */,
+				GC2000000000000000000001 /* AgentConnectGreeting.swift */,
+				FS2000000000000000000001 /* AgentFocusService.swift */,
+				BI2000000000000000000001 /* AgentBackgroundTaskInspector.swift */,
+				TA2000000000000000000001 /* AgentTaskNotificationAction.swift */,
+				UR2000000000000000000001 /* AgentURLCommandRouter.swift */,
+				AG2008000800080008 /* AgentConversationPersister.swift */,
+				AG2009000900090009 /* AgentToolRegistry.swift */,
+				AG200A000A000A000A /* CustomAgentService.swift */,
+				AG200C000C000C000C /* AgentShortcutStore.swift */,
+				AG200D000D000D000D /* AgentMemoryStore.swift */,
+				AG201A001A001A001A /* AgentRuleStore.swift */,
+				AG200E000E000E000E /* AgentMemoryExtractor.swift */,
+				AG2015001500150015 /* AgentListStore.swift */,
+				AG2016001600160016 /* AgentReminderStore.swift */,
+				WS20020002000200020002 /* AgentWidgetSnapshot.swift */,
+				AG2017001700170017 /* VisionSceneService.swift */,
+				AG2018001800180018 /* AgentDiagnostics.swift */,
+				AG200F000F000F000F /* AgentVisionContext.swift */,
+				AG2010001000100010 /* VisionOCRService.swift */,
+				AG2011001100110011 /* CustomWebSocketAgentService.swift */,
+				AG2012001200120012 /* VisionTranslationPlanner.swift */,
+				LW20010001000100010001 /* AgentLiveActivityModels.swift */,
+				LW20030003000300030003 /* AgentLiveActivityManager.swift */,
+				SH20020002000200020002 /* AgentShareQueue.swift */,
+				CL2000000000000000000001 /* AgentCalendarService.swift */,
+				BF2000000000000000000001 /* AgentBriefingStore.swift */,
+				HL2000000000000000000001 /* AgentHealthService.swift */,
+				HM2000000000000000000001 /* AgentHomeKitService.swift */,
+				WT2000000000000000000001 /* AgentWearableTriggerService.swift */,
+				NB2000000000000000000001 /* AgentNotificationButler.swift */,
+			);
+			path = Agents;
+			sourceTree = "<group>";
+		};
 		B7A4CF23D001000000000007 /* Core */ = {
 			isa = PBXGroup;
 			children = (
@@ -513,6 +854,71 @@
 			path = Core;
 			sourceTree = "<group>";
 		};
+		B7A4CF23D001000000000032 /* HyperMetaAIUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B7A4CF23D001000000000031 /* DeviceUITests.swift */,
+			);
+			path = HyperMetaAIUITests;
+			sourceTree = "<group>";
+		};
+		CT3000000000000000000001 /* HyperMetaAIControls */ = {
+			isa = PBXGroup;
+			children = (
+				CT20010001000100010001 /* VoiceSessionControl.swift */,
+				CT20020002000200020002 /* VoiceControlIntents.swift */,
+				CT20030003000300030003 /* VoiceControlRequestStore.swift */,
+				CT20040004000400040004 /* Info.plist */,
+				CT20050005000500050005 /* HyperMetaAIControls.entitlements */,
+				LW20020002000200020002 /* AgentLiveActivityWidget.swift */,
+				HW20020002000200020002 /* AgentHomeWidget.swift */,
+				TV2000000000000000000001 /* AgentTaskViewControlIntent.swift */,
+				AP2000000000000000000001 /* AgentApprovalControlIntent.swift */,
+				RM2000000000000000000001 /* AgentReminderControlIntent.swift */,
+				CB2000000000000000000001 /* BriefingControl.swift */,
+			);
+			path = HyperMetaAIControls;
+			sourceTree = "<group>";
+		};
+		D01300000000000000000001 /* DouyinLive */ = {
+			isa = PBXGroup;
+			children = (
+				D01200000000000000000001 /* DouyinLiveModels.swift */,
+				D01200000000000000000009 /* DouyinAuthorizationCoordinator.swift */,
+				D01200000000000000000002 /* DouyinWebRuntime.swift */,
+				D01200000000000000000003 /* DouyinWebcastAPIClient.swift */,
+				D01200000000000000000004 /* DouyinMessageTransport.swift */,
+				D01200000000000000000005 /* DouyinMediaAdapters.swift */,
+				D01200000000000000000006 /* DouyinLiveCoordinator.swift */,
+				D01200000000000000000007 /* DouyinLiveView.swift */,
+				D01200000000000000000008 /* DouyinLiveModule.swift */,
+			);
+			name = DouyinLive;
+			path = Modules/DouyinLive;
+			sourceTree = "<group>";
+		};
+		GW3000000000000000 /* Gateway */ = {
+			isa = PBXGroup;
+			children = (
+				GW20010001000100010001 /* AgentGatewayModels.swift */,
+				GW20020002000200020002 /* AgentGatewayCoordinator.swift */,
+				GW20030003000300030003 /* AgentGatewayWorkQueue.swift */,
+				GW20040004000400040004 /* AgentGatewayResponseGuards.swift */,
+				GW20050005000500050005 /* AgentGatewayAnnouncementWindow.swift */,
+				GW20060006000600060006 /* AgentGatewayService.swift */,
+			);
+			path = Gateway;
+			sourceTree = "<group>";
+		};
+		HM3000000000000000 /* Hermes */ = {
+			isa = PBXGroup;
+			children = (
+				HM2001000100010001 /* HermesModels.swift */,
+				HM2002000200020002 /* HermesService.swift */,
+			);
+			path = Hermes;
+			sourceTree = "<group>";
+		};
 		OC3000000000000000 /* OpenClaw */ = {
 			isa = PBXGroup;
 			children = (
@@ -523,6 +929,35 @@
 				OC2007000700070007 /* OpenClawASRService.swift */,
 			);
 			path = OpenClaw;
+			sourceTree = "<group>";
+		};
+		QW3000000000000000 /* Qwen */ = {
+			isa = PBXGroup;
+			children = (
+				QW2001000100010001 /* QwenGatewayModels.swift */,
+				HW2001000100010001 /* QwenRealtimeModelCatalog.swift */,
+				HW2001000100010002 /* QwenWakeWord.swift */,
+				QW2002000200020002 /* QwenGatewayService.swift */,
+			);
+			path = Qwen;
+			sourceTree = "<group>";
+		};
+		SH3000000000000000000001 /* HyperMetaAIShare */ = {
+			isa = PBXGroup;
+			children = (
+				SH20010001000100010001 /* ShareViewController.swift */,
+				SH20040004000400040004 /* Info.plist */,
+				SH20050005000500050005 /* HyperMetaAIShare.entitlements */,
+			);
+			path = HyperMetaAIShare;
+			sourceTree = "<group>";
+		};
+		SI3000000000000000 /* Indexing */ = {
+			isa = PBXGroup;
+			children = (
+				SI20020002000200020002 /* SpotlightIndexer.swift */,
+			);
+			path = Indexing;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -536,15 +971,54 @@
 				4A4A4A4A4A4A4A4A4A4A4A4A /* Frameworks */,
 				BBBBBBBBBBBBBBBBBBBBBB /* Resources */,
 				8FD96B932E6F0C6E00F56AB1 /* Embed Frameworks */,
+				SH7000000000000000000004 /* Embed App Extensions */,
+				CT7000000000000000000004 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				SH8000000000000000000001 /* PBXTargetDependency */,
+				CT8000000000000000000001 /* PBXTargetDependency */,
 			);
 			name = HyperMetaAI;
 			productName = HyperMetaAI;
 			productReference = 3A3A3A3A3A3A3A3A3A3A3A3A /* HyperMetaAI.app */;
 			productType = "com.apple.product-type.application";
+		};
+		B7A4CF23D001000000000037 /* HyperMetaAIUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B7A4CF23D001000000000039 /* Build configuration list for PBXNativeTarget "HyperMetaAIUITests" */;
+			buildPhases = (
+				B7A4CF23D001000000000034 /* Sources */,
+				B7A4CF23D001000000000035 /* Frameworks */,
+				B7A4CF23D001000000000036 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B7A4CF23D001000000000043 /* PBXTargetDependency */,
+			);
+			name = HyperMetaAIUITests;
+			productName = HyperMetaAIUITests;
+			productReference = B7A4CF23D001000000000038 /* HyperMetaAIUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		CT4000000000000000000001 /* HyperMetaAIControls */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CT5000000000000000000001 /* Build configuration list for PBXNativeTarget "HyperMetaAIControls" */;
+			buildPhases = (
+				CT7000000000000000000001 /* Sources */,
+				CT7000000000000000000002 /* Frameworks */,
+				CT7000000000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = HyperMetaAIControls;
+			productName = HyperMetaAIControls;
+			productReference = CT20060006000600060006 /* HyperMetaAIControls.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		E699CC942E8150670052C240 /* HyperMetaAITests */ = {
 			isa = PBXNativeTarget;
@@ -570,23 +1044,22 @@
 			productReference = E699CC952E8150670052C240 /* HyperMetaAITests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		B7A4CF23D001000000000037 /* HyperMetaAIUITests */ = {
+		SH4000000000000000000001 /* HyperMetaAIShare */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B7A4CF23D001000000000039 /* Build configuration list for PBXNativeTarget "HyperMetaAIUITests" */;
+			buildConfigurationList = SH5000000000000000000001 /* Build configuration list for PBXNativeTarget "HyperMetaAIShare" */;
 			buildPhases = (
-				B7A4CF23D001000000000034 /* Sources */,
-				B7A4CF23D001000000000035 /* Frameworks */,
-				B7A4CF23D001000000000036 /* Resources */,
+				SH7000000000000000000001 /* Sources */,
+				SH7000000000000000000002 /* Frameworks */,
+				SH7000000000000000000003 /* Resources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				B7A4CF23D001000000000043 /* PBXTargetDependency */,
 			);
-			name = HyperMetaAIUITests;
-			productName = HyperMetaAIUITests;
-			productReference = B7A4CF23D001000000000038 /* HyperMetaAIUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
+			name = HyperMetaAIShare;
+			productName = HyperMetaAIShare;
+			productReference = SH20060006000600060006 /* HyperMetaAIShare.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -599,12 +1072,20 @@
 				TargetAttributes = {
 					8A8A8A8A8A8A8A8A8A8A8A8A = {
 						CreatedOnToolsVersion = 12.5;
+						SystemCapabilities = {
+							com.apple.HealthKit = {
+								enabled = 1;
+							};
+						};
 					};
-					E699CC942E8150670052C240 = {
+					B7A4CF23D001000000000037 = {
 						CreatedOnToolsVersion = 26.0;
 						TestTargetID = 8A8A8A8A8A8A8A8A8A8A8A8A;
 					};
-					B7A4CF23D001000000000037 = {
+					CT4000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					E699CC942E8150670052C240 = {
 						CreatedOnToolsVersion = 26.0;
 						TestTargetID = 8A8A8A8A8A8A8A8A8A8A8A8A;
 					};
@@ -629,6 +1110,8 @@
 			projectRoot = "";
 			targets = (
 				8A8A8A8A8A8A8A8A8A8A8A8A /* HyperMetaAI */,
+				SH4000000000000000000001 /* HyperMetaAIShare */,
+				CT4000000000000000000001 /* HyperMetaAIControls */,
 				E699CC942E8150670052C240 /* HyperMetaAITests */,
 				B7A4CF23D001000000000037 /* HyperMetaAIUITests */,
 			);
@@ -636,6 +1119,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		B7A4CF23D001000000000036 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BBBBBBBBBBBBBBBBBBBBBB /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -646,6 +1136,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CT7000000000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		E699CC932E8150670052C240 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -653,10 +1150,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		B7A4CF23D001000000000036 /* Resources */ = {
+		SH7000000000000000000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				SH10030003000300030003 /* Localizable.strings in Resources */,
+				SH10040004000400040004 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -667,6 +1166,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D01100000000000000000001 /* DouyinLiveModels.swift in Sources */,
+				D01100000000000000000009 /* DouyinAuthorizationCoordinator.swift in Sources */,
+				D01100000000000000000002 /* DouyinWebRuntime.swift in Sources */,
+				D01100000000000000000003 /* DouyinWebcastAPIClient.swift in Sources */,
+				D01100000000000000000004 /* DouyinMessageTransport.swift in Sources */,
+				D01100000000000000000005 /* DouyinMediaAdapters.swift in Sources */,
+				D01100000000000000000006 /* DouyinLiveCoordinator.swift in Sources */,
+				D01100000000000000000007 /* DouyinLiveView.swift in Sources */,
+				D01100000000000000000008 /* DouyinLiveModule.swift in Sources */,
 				8FD96B7F2E6F0A9800F56AB1 /* HyperMetaAIApp.swift in Sources */,
 				4BA57AC32EF8227E002EC214 /* ConversationDetailView.swift in Sources */,
 				4BA57AC42EF8227E002EC214 /* CircleButton.swift in Sources */,
@@ -709,6 +1217,7 @@
 				4BA57ADE2EF8227E002EC214 /* StreamSessionView.swift in Sources */,
 				4B69CCC52F050D5200D1D025 /* RTMPStreamingViewModel.swift in Sources */,
 				4BA57AE02EF8227E002EC214 /* ConversationStorage.swift in Sources */,
+				CE10000000000000000001 /* ConversationExport.swift in Sources */,
 				4BA57AE12EF8227E002EC214 /* SimpleLiveStreamView.swift in Sources */,
 				4BA57AE32EF8227E002EC214 /* FoodNutritionModel.swift in Sources */,
 				4BA57AE42EF8227E002EC214 /* OmniRealtimeView.swift in Sources */,
@@ -726,6 +1235,7 @@
 				05043536CDB06C0B88B3C4D9 /* TTSService.swift in Sources */,
 				26664DE8308E3F2981609421 /* QuickVisionService.swift in Sources */,
 				A5C50340AFD334B459151AF1 /* QuickVisionIntent.swift in Sources */,
+				CP10000000000000000001 /* CapturedPhotoStore.swift in Sources */,
 				D83E4BD577765733E71A0068 /* QuickVisionView.swift in Sources */,
 				B3F7AF9C18583263BE4D96A1 /* LanguageManager.swift in Sources */,
 				4B69CCC72F050D5D00D1D025 /* RTMPStreamingService.swift in Sources */,
@@ -746,17 +1256,90 @@
 				OC1001000100010001 /* OpenClawModels.swift in Sources */,
 				OC1002000200020002 /* OpenClawNodeService.swift in Sources */,
 				OC1003000300030003 /* OpenClawCommandRouter.swift in Sources */,
-				OC1004000400040004 /* OpenClawSettingsView.swift in Sources */,
 				OC1005000500050005 /* OpenClawDeviceIdentity.swift in Sources */,
-				OC1006000600060006 /* OpenClawChatView.swift in Sources */,
 				OC1007000700070007 /* OpenClawASRService.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		E699CC912E8150670052C240 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
+				AG1001000100010001 /* AgentProvider.swift in Sources */,
+				AG1002000200020002 /* AgentChatView.swift in Sources */,
+				AG1003000300030003 /* AgentHubView.swift in Sources */,
+				AG1004000400040004 /* AgentSettingsView.swift in Sources */,
+				AG1005000500050005 /* AgentDeviceTrigger.swift in Sources */,
+				AG1006000600060006 /* AgentTurnStateMachine.swift in Sources */,
+				AG1007000700070007 /* AgentDisplayHub.swift in Sources */,
+				HD1000000000000000000001 /* AgentDisplayHome.swift in Sources */,
+				GC1000000000000000000001 /* AgentConnectGreeting.swift in Sources */,
+				FS1000000000000000000001 /* AgentFocusService.swift in Sources */,
+				BI1000000000000000000001 /* AgentBackgroundTaskInspector.swift in Sources */,
+				TA1000000000000000000001 /* AgentTaskNotificationAction.swift in Sources */,
+				UR1000000000000000000001 /* AgentURLCommandRouter.swift in Sources */,
+				AG1008000800080008 /* AgentConversationPersister.swift in Sources */,
+				TL1001000100010001 /* AgentTaskListView.swift in Sources */,
+				RS1001000100010001 /* RTMPStreamScenario.swift in Sources */,
+				RS1002000200020002 /* RTMPRecording.swift in Sources */,
+				RS1003000300030003 /* RTMPStreamRecorder.swift in Sources */,
+				RS1004000400040004 /* RTMPLiveScene.swift in Sources */,
+				RS1005000500050005 /* RTMPDiagnostics.swift in Sources */,
+				RS1006000600060006 /* RecordingPlaybackView.swift in Sources */,
+				RS1007000700070007 /* RTMPSceneSuggestion.swift in Sources */,
+				RS1008000800080008 /* RTMPParallel.swift in Sources */,
+				RS1009000900090009 /* RTMPLivePermission.swift in Sources */,
+				RS100A000A000A000A /* RTMPTitlePolish.swift in Sources */,
+				RS100B000B000B000B /* LocalBrainService.swift in Sources */,
+				GW10010001000100010001 /* AgentGatewayModels.swift in Sources */,
+				GW10020002000200020002 /* AgentGatewayCoordinator.swift in Sources */,
+				GW10030003000300030003 /* AgentGatewayWorkQueue.swift in Sources */,
+				GW10040004000400040004 /* AgentGatewayResponseGuards.swift in Sources */,
+				GW10050005000500050005 /* AgentGatewayAnnouncementWindow.swift in Sources */,
+				GW10060006000600060006 /* AgentGatewayService.swift in Sources */,
+				PS100A000A000A000A /* AgentPersonaStore.swift in Sources */,
+				AG1009000900090009 /* AgentToolRegistry.swift in Sources */,
+				AG100A000A000A000A /* CustomAgentService.swift in Sources */,
+				AG100C000C000C000C /* AgentShortcutStore.swift in Sources */,
+				AG100D000D000D000D /* AgentMemoryStore.swift in Sources */,
+				AG101A001A001A001A /* AgentRuleStore.swift in Sources */,
+				AG100E000E000E000E /* AgentMemoryExtractor.swift in Sources */,
+				AG1015001500150015 /* AgentListStore.swift in Sources */,
+				AG1016001600160016 /* AgentReminderStore.swift in Sources */,
+				WS10010001000100010001 /* AgentWidgetSnapshot.swift in Sources */,
+				AG1017001700170017 /* VisionSceneService.swift in Sources */,
+				AG1018001800180018 /* AgentDiagnostics.swift in Sources */,
+				AG1019001900190019 /* AgentDiagnosticsView.swift in Sources */,
+				AG100F000F000F000F /* AgentVisionContext.swift in Sources */,
+				AG1010001000100010 /* VisionOCRService.swift in Sources */,
+				AG1011001100110011 /* CustomWebSocketAgentService.swift in Sources */,
+				AG1012001200120012 /* VisionTranslationPlanner.swift in Sources */,
+				AG1013001300130013 /* VoiceAssistantAppIntent.swift in Sources */,
+				LT10010001000100010001 /* LocalToolsAppIntent.swift in Sources */,
+				AK1000000000000000000001 /* AgentAskAppIntent.swift in Sources */,
+				SC1000000000000000000001 /* SystemSchemaIntents.swift in Sources */,
+				AG1014001400140014 /* VoiceAssistantRouter.swift in Sources */,
+				SA10010001000100010001 /* HomeScreenShortcutActions.swift in Sources */,
+				NR10010001000100010001 /* AppNavigationRouter.swift in Sources */,
+				SI10010001000100010001 /* SpotlightIndexer.swift in Sources */,
+				CT10040004000400040004 /* VoiceControlRequestStore.swift in Sources */,
+				LW10010001000100010001 /* AgentLiveActivityModels.swift in Sources */,
+				LW10040004000400040004 /* AgentLiveActivityManager.swift in Sources */,
+				AG100B000B000B000B /* CustomAgentConfigSheetView.swift in Sources */,
+				QW1001000100010001 /* QwenGatewayModels.swift in Sources */,
+				HW1001000100010001 /* QwenRealtimeModelCatalog.swift in Sources */,
+				HW1001000100010002 /* QwenWakeWord.swift in Sources */,
+				QW1002000200020002 /* QwenGatewayService.swift in Sources */,
+				QW1003000300030003 /* QwenVoiceSession.swift in Sources */,
+				QW1004000400040004 /* QwenVoiceView.swift in Sources */,
+				QW1005000500050005 /* QwenGatewayConfigSheetView.swift in Sources */,
+				MO1001000100010001 /* MetalOrbView.swift in Sources */,
+				MO1002000200020002 /* AssistantOrb.metal in Sources */,
+				SS1001000100010001 /* SimplifiedSettingsView.swift in Sources */,
+				HM1001000100010001 /* HermesModels.swift in Sources */,
+				HM1002000200020002 /* HermesService.swift in Sources */,
+				SH10020002000200020002 /* AgentShareQueue.swift in Sources */,
+				CL1000000000000000000001 /* AgentCalendarService.swift in Sources */,
+				BF1000000000000000000001 /* AgentBriefingStore.swift in Sources */,
+				HL1000000000000000000001 /* AgentHealthService.swift in Sources */,
+				HM1000000000000000000001 /* AgentHomeKitService.swift in Sources */,
+				WT1000000000000000000001 /* AgentWearableTriggerService.swift in Sources */,
+				NB1000000000000000000001 /* AgentNotificationButler.swift in Sources */,
+				WT1000000000000000000002 /* WearableTriggerAppIntent.swift in Sources */,
+				WT1000000000000000000003 /* AgentWearablesHubView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -768,18 +1351,60 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		CT7000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CT10010001000100010001 /* VoiceSessionControl.swift in Sources */,
+				CT10020002000200020002 /* VoiceControlIntents.swift in Sources */,
+				CT10030003000300030003 /* VoiceControlRequestStore.swift in Sources */,
+				LW10020002000200020002 /* AgentLiveActivityModels.swift in Sources */,
+				LW10030003000300030003 /* AgentLiveActivityWidget.swift in Sources */,
+				HW10010001000100010001 /* AgentHomeWidget.swift in Sources */,
+				TV1000000000000000000001 /* AgentTaskViewControlIntent.swift in Sources */,
+				AP1000000000000000000001 /* AgentApprovalControlIntent.swift in Sources */,
+				RM1000000000000000000001 /* AgentReminderControlIntent.swift in Sources */,
+				CB1000000000000000000001 /* BriefingControl.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E699CC912E8150670052C240 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		SH7000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				SH10010001000100010001 /* ShareViewController.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		B7A4CF23D001000000000043 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 8A8A8A8A8A8A8A8A8A8A8A8A /* HyperMetaAI */;
+			targetProxy = B7A4CF23D001000000000042 /* PBXContainerItemProxy */;
+		};
+		CT8000000000000000000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CT4000000000000000000001 /* HyperMetaAIControls */;
+			targetProxy = CT9000000000000000000001 /* PBXContainerItemProxy */;
+		};
 		E699CC9A2E8150670052C240 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 8A8A8A8A8A8A8A8A8A8A8A8A /* HyperMetaAI */;
 			targetProxy = E699CC992E8150670052C240 /* PBXContainerItemProxy */;
 		};
-		B7A4CF23D001000000000043 /* PBXTargetDependency */ = {
+		SH8000000000000000000001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 8A8A8A8A8A8A8A8A8A8A8A8A /* HyperMetaAI */;
-			targetProxy = B7A4CF23D001000000000042 /* PBXContainerItemProxy */;
+			target = SH4000000000000000000001 /* HyperMetaAIShare */;
+			targetProxy = SH9000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -859,6 +1484,98 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		B7A4CF23D001000000000040 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FYWDVBBN6N;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = HyperMetaAI;
+			};
+			name = Debug;
+		};
+		B7A4CF23D001000000000041 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FYWDVBBN6N;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.uitests";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = HyperMetaAI;
+			};
+			name = Release;
+		};
+		CT6000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = HyperMetaAIControls/HyperMetaAIControls.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FYWDVBBN6N;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HyperMetaAIControls/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.controls";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		CT6000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = HyperMetaAIControls/HyperMetaAIControls.entitlements;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = FYWDVBBN6N;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HyperMetaAIControls/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.controls";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -1041,41 +1758,57 @@
 			};
 			name = Release;
 		};
-		B7A4CF23D001000000000040 /* Debug */ = {
+		SH6000000000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = HyperMetaAIShare/HyperMetaAIShare.entitlements;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = FYWDVBBN6N;
+				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HyperMetaAIShare/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.uitests";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.share";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = HyperMetaAI;
 			};
 			name = Debug;
 		};
-		B7A4CF23D001000000000041 /* Release */ = {
+		SH6000000000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_IDENTITY = "Apple Development";
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = HyperMetaAIShare/HyperMetaAIShare.entitlements;
+				CODE_SIGN_IDENTITY = "";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = FYWDVBBN6N;
+				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = HyperMetaAIShare/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.uitests";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.4.0;
+				PRODUCT_BUNDLE_IDENTIFIER = "com.lunflux.hyper-meta-ai.share";
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
-				TEST_TARGET_NAME = HyperMetaAI;
 			};
 			name = Release;
 		};
@@ -1087,6 +1820,24 @@
 			buildConfigurations = (
 				0B0B0B0B0B0B0B0B0B0B0B0B /* Debug */,
 				0C0C0C0C0C0C0C0C0C0C0C0C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B7A4CF23D001000000000039 /* Build configuration list for PBXNativeTarget "HyperMetaAIUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B7A4CF23D001000000000040 /* Debug */,
+				B7A4CF23D001000000000041 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		CT5000000000000000000001 /* Build configuration list for PBXNativeTarget "HyperMetaAIControls" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CT6000000000000000000001 /* Debug */,
+				CT6000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1109,11 +1860,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B7A4CF23D001000000000039 /* Build configuration list for PBXNativeTarget "HyperMetaAIUITests" */ = {
+		SH5000000000000000000001 /* Build configuration list for PBXNativeTarget "HyperMetaAIShare" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				B7A4CF23D001000000000040 /* Debug */,
-				B7A4CF23D001000000000041 /* Release */,
+				SH6000000000000000000001 /* Debug */,
+				SH6000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -1164,6 +1915,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
 			productName = MWDATMockDevice;
+		};
+		DS0000000000000000000002 /* MWDATDisplay */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 95F7F3332DEF0D91006D1C1A /* XCRemoteSwiftPackageReference "meta-wearables-dat-ios" */;
+			productName = MWDATDisplay;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -73,7 +73,9 @@ enum StreamSessionOwner: Hashable {
   case liveTranslate
   case rtmp
   case simpleLiveStream
-  case openClawChat
+  case agentChat
+  /// Agent 交互页持有的轻量会话（只收镜腿触发事件，不采集视频）
+  case agentTrigger
   case openClawRemote
 }
 
@@ -84,6 +86,24 @@ enum StreamSessionState: Equatable {
   case paused
   case stopping
   case failed(String)
+}
+
+/// 首选眼镜设备偏好（UserDefaults 持久化；多副眼镜时指定使用哪一副）
+enum DevicePreferenceStore {
+    static let key = "device.preferred.id"
+
+    static var preferredDeviceID: String? {
+        get {
+            UserDefaults.standard.string(forKey: key)
+        }
+        set {
+            if let newValue, !newValue.isEmpty {
+                UserDefaults.standard.set(newValue, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+    }
 }
 
 private struct StreamStartupWaiter {
@@ -237,10 +257,25 @@ enum DATGlassesAppUpdateGuidance {
   }
 
   static func isRequired(for error: DeviceSessionError) -> Bool {
-    if case .datAppOnTheGlassesUpdateRequired = error {
+    switch error {
+    case .datAppOnTheGlassesUpdateRequired:
       return true
+    case .unexpectedError(let description):
+      return isRequired(message: description)
+    default:
+      return false
     }
-    return false
+  }
+
+  static func isRequired(message: String) -> Bool {
+    let normalized = message
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    return normalized.contains("直播软件更新")
+      || normalized.contains("最新版本后重试")
+      || normalized.contains("dat app update")
+      || normalized.contains("dat sdk update")
+      || normalized.contains("glasses app update required")
   }
 }
 
@@ -312,6 +347,10 @@ class StreamSessionViewModel: ObservableObject {
   @Published var errorMessage: String = ""
   @Published private(set) var requiresDATGlassesAppUpdate = false
   @Published var hasActiveDevice: Bool = false
+  /// 当前可用的眼镜设备列表（多设备选择用）
+  @Published private(set) var availableDevices: [String] = []
+  /// 当前会话正在使用的设备 ID（无会话/未连接时为 nil）
+  @Published private(set) var activeDeviceID: String?
   @Published private(set) var videoPerformanceMetrics: VideoFramePerformanceSnapshot = .empty
   @Published private(set) var usesDirectSampleBufferPreview = false
 
@@ -378,8 +417,9 @@ class StreamSessionViewModel: ObservableObject {
   private var deviceSessionStateTask: Task<Void, Never>?
   private var deviceSessionErrorTask: Task<Void, Never>?
   private let wearables: WearablesInterface
-  private let deviceSelector: AutoDeviceSelector
+  private var deviceSelector: any DeviceSelector
   private var deviceMonitorTask: Task<Void, Never>?
+  private var deviceListTask: Task<Void, Never>?
   private var startTask: Task<Bool, Never>?
   private var streamStartupWaiter: StreamStartupWaiter?
   private var streamStartupTimeoutTask: Task<Void, Never>?
@@ -392,6 +432,23 @@ class StreamSessionViewModel: ObservableObject {
   private var automaticRecoveryIsSuppressed = false
   private var datGlassesAppUpdateRetryGate = DATGlassesAppUpdateRetryGate()
   private var isStoppingUnderlyingSession = false
+  /// 眼镜物理触发事件回调（Agent 页设置；同一时间仅一个页面活跃）
+  var onDeviceTrigger: ((AgentDeviceTrigger) -> Void)?
+  /// 设备断连后重新可用回调（Agent 页用于提示「单击恢复交互」）
+  var onDeviceReconnected: (() -> Void)?
+  /// 眼镜变为可用回调（系统级功能监听：连接问候等；进入页面首次可用即触发）
+  var onDeviceAvailable: (() -> Void)? {
+    didSet {
+      // 可用事件可能早于监听赋值（启动竞态）：赋值时若设备已可用立即补发
+      guard onDeviceAvailable != nil, hasActiveDevice else { return }
+      onDeviceAvailable?()
+    }
+  }
+  /// 是否在存在重连监听时经历过断连（避免进入页面时的首次连接误报）
+  private var lostDeviceWhileReconnectListenerActive = false
+  /// 设备会话意外结束的瞬态标志（由 onDeviceTrigger 消费方读取并清除）
+  private(set) var lastDeviceSessionEndWasUnexpected = false
+  private var deviceTriggerDetector = AgentDeviceTriggerDetector()
   private var isApplicationActive = true
   private var leases = StreamSessionLeaseRegistry()
   private var frameUpdateThrottle = FrameUpdateThrottle(maximumFramesPerSecond: 15)
@@ -423,12 +480,33 @@ class StreamSessionViewModel: ObservableObject {
   init(wearables: WearablesInterface) {
     self.wearables = wearables
     logger.info("🟢 StreamSessionViewModel init")
-    // Let the SDK auto-select from available devices
-    self.deviceSelector = AutoDeviceSelector(wearables: wearables)
+    self.deviceSelector = Self.makeSelector(wearables: wearables)
+    self.availableDevices = wearables.devices
 
     startDeviceMonitoring()
     startVideoPerformanceReporting()
     logger.info("🟢 StreamSessionViewModel init complete")
+  }
+
+  /// 首选设备：按偏好创建 SpecificDeviceSelector，否则自动选择
+  private static func makeSelector(wearables: WearablesInterface) -> any DeviceSelector {
+    if let preferredID = DevicePreferenceStore.preferredDeviceID,
+       wearables.devices.contains(preferredID) {
+        return SpecificDeviceSelector(device: preferredID)
+    }
+    return AutoDeviceSelector(wearables: wearables)
+  }
+
+  /// 切换首选设备：持久化偏好；后续会话按新选择器创建
+  func setPreferredDevice(_ deviceID: String?) {
+    DevicePreferenceStore.preferredDeviceID = deviceID
+    deviceSelector = Self.makeSelector(wearables: wearables)
+    hasActiveDevice = deviceSelector.activeDevice != nil
+  }
+
+  /// 设备显示名（无名称时回退为 ID）
+  func deviceDisplayName(_ deviceID: String) -> String {
+    wearables.deviceForIdentifier(deviceID)?.nameOrId() ?? deviceID
   }
 
   /// The Live AI view owns the visible AVSampleBufferDisplayLayer. Keeping the
@@ -456,6 +534,10 @@ class StreamSessionViewModel: ObservableObject {
   /// returns after the stream is ready or a bounded startup attempt has failed.
   @discardableResult
   func acquireStream(for owner: StreamSessionOwner) async -> Bool {
+    if requiresDATGlassesAppUpdate, datGlassesAppUpdateRetryGate.consumeRetry() {
+      resetTerminalFailure()
+    }
+
     guard terminalDeviceSessionError == nil else {
       let message = terminalDeviceSessionError.map(formatDeviceSessionError)
         ?? "The glasses session must be resolved before streaming can restart."
@@ -498,6 +580,60 @@ class StreamSessionViewModel: ObservableObject {
     cancelStartAttempt()
     stopUnderlyingSession(preservingFailure: sessionState.isFailure)
     await waitForPendingStop()
+  }
+
+  /// Agent 交互页专用：启动一个不采集视频的轻量会话，让镜腿触发事件
+  /// （单击/长按）在语音与聊天页面始终可用，不占用摄像头资源。
+  /// 与其他功能共用底层 DeviceSession，并持有 lease 防止被提前停止。
+  @discardableResult
+  func acquireAgentTriggerSession() async -> Bool {
+    _ = leases.acquire(.agentTrigger)
+
+    guard !requiresDATGlassesAppUpdate || datGlassesAppUpdateRetryGate.consumeRetry() else {
+      return false
+    }
+    guard terminalDeviceSessionError == nil,
+          !requiresSessionResetAfterDisconnect,
+          isApplicationActive else {
+      return false
+    }
+    guard hasActiveDevice else {
+      // 镜腿触发是可选增强：无眼镜时语音/聊天仍可独立工作，不污染全局会话状态
+      return false
+    }
+
+    do {
+      try createDeviceSessionIfNeeded()
+      guard let deviceSession else { return false }
+      if deviceSession.state != .started {
+        try deviceSession.start()
+      }
+      guard await waitForDeviceSessionToBecomeReady(attempt: makeAgentTriggerAttempt()) else {
+        return false
+      }
+      return true
+    } catch {
+      logger.error("❌ Failed to start agent trigger session: \(error.localizedDescription)")
+      return false
+    }
+  }
+
+  /// 释放 Agent 交互轻量会话；仅当没有其他功能占用时停止底层会话。
+  func releaseAgentTriggerSession() async {
+    await releaseStream(for: .agentTrigger)
+  }
+
+  /// 读取并清除"设备会话意外结束"标志（供触发回调消费）
+  @discardableResult
+  func consumeUnexpectedDeviceEndFlag() -> Bool {
+    let value = lastDeviceSessionEndWasUnexpected
+    lastDeviceSessionEndWasUnexpected = false
+    return value
+  }
+
+  private func makeAgentTriggerAttempt() -> Int {
+    startAttemptGeneration &+= 1
+    return startAttemptGeneration
   }
 
   /// Compatibility entry point for legacy manual controls.
@@ -544,6 +680,13 @@ class StreamSessionViewModel: ObservableObject {
         )
       }
     }
+  }
+
+  func recordDATGlassesAppUpdateRequirement(message: String) {
+    guard DATGlassesAppUpdateGuidance.isRequired(message: message) else { return }
+    datGlassesAppUpdateRetryGate.requireUpdate()
+    requiresDATGlassesAppUpdate = true
+    automaticRecoveryIsSuppressed = true
   }
 
   func setTimeLimit(_ limit: StreamTimeLimit) {
@@ -596,6 +739,8 @@ class StreamSessionViewModel: ObservableObject {
     streamGeneration &+= 1
     let generation = streamGeneration
     self.deviceSession = deviceSession
+    // 会话创建后挂载眼镜端状态显示（无显示能力时静默降级）
+    AgentDisplayHub.shared.attach(to: deviceSession)
     subscribe(to: deviceSession, generation: generation)
   }
 
@@ -822,6 +967,17 @@ class StreamSessionViewModel: ObservableObject {
         if let uiImage = UIImage(data: photoData.data) {
           self.capturedPhoto = uiImage
           self.showPhotoPreview = true
+          // 本地存档：拍摄的照片进入 App 图库（本地优先，不上云）
+          if let jpeg = uiImage.jpegData(compressionQuality: 0.9),
+             let record = CapturedPhotoStore.addPhoto(data: jpeg) {
+            // 端侧场景识别回填 AI 描述（Apple Vision 离线，画面不出设备）
+            Task {
+              let result = await VisionSceneService.analyze(uiImage)
+              let summary = VisionSceneTextProcessor.summaryText(from: result)
+              guard !summary.isEmpty else { return }
+              CapturedPhotoStore.updateDescription(id: record.id, description: summary)
+            }
+          }
         }
       }
     }
@@ -872,6 +1028,7 @@ class StreamSessionViewModel: ObservableObject {
     }
     stream = nil
     deviceSession = nil
+    AgentDisplayHub.shared.detach()
   }
 
   private func updateStatusFromState(_ state: StreamState) {
@@ -918,6 +1075,18 @@ class StreamSessionViewModel: ObservableObject {
     guard streamGeneration == generation else { return }
 
     logger.info("📱 Device session state changed: \(String(describing: state))")
+    if let trigger = deviceTriggerDetector.consume(
+      sessionState: state,
+      isAppStopping: isStoppingUnderlyingSession
+    ) {
+      if AgentDeviceEndDetector.isUnexpectedEnd(
+        sessionState: state,
+        isAppStopping: isStoppingUnderlyingSession
+      ) {
+        lastDeviceSessionEndWasUnexpected = true
+      }
+      onDeviceTrigger?(trigger)
+    }
     switch state {
     case .idle, .starting:
       if sessionState != .stopping {
@@ -1184,7 +1353,10 @@ class StreamSessionViewModel: ObservableObject {
       guard let deviceSession else {
         throw StreamingSetupError.deviceSessionUnavailable
       }
-      try deviceSession.start()
+      // 轻量会话（agentTrigger）可能已把会话启动为 started，重复 start 直接复用
+      if deviceSession.state != .started {
+        try deviceSession.start()
+      }
       guard await waitForDeviceSessionToBecomeReady(attempt: attempt) else {
         if let terminalDeviceSessionError {
           throw StreamingSetupError.deviceSessionFailed(formatDeviceSessionError(terminalDeviceSessionError))
@@ -1224,6 +1396,7 @@ class StreamSessionViewModel: ObservableObject {
 
     let terminalError = terminalDeviceSessionError
     let message = terminalError.map(formatDeviceSessionError) ?? error.localizedDescription
+    recordDATGlassesAppUpdateRequirement(message: message)
     logger.error("❌ Failed to start stream: \(message)")
     streamingStatus = .stopped
     sessionState = .failed(message)
@@ -1421,10 +1594,23 @@ class StreamSessionViewModel: ObservableObject {
 
     hasActiveDevice = deviceSelector.activeDevice != nil
     let selector = deviceSelector
+    let wearables = self.wearables
+    deviceListTask = Task { @MainActor [weak self, wearables] in
+      for await devices in wearables.devicesStream() {
+        guard !Task.isCancelled, let self else { break }
+        self.availableDevices = devices
+        // 首选设备不在可用列表时回退自动选择
+        if let preferred = DevicePreferenceStore.preferredDeviceID,
+           !devices.contains(preferred) {
+          self.deviceSelector = AutoDeviceSelector(wearables: wearables)
+        }
+      }
+    }
     deviceMonitorTask = Task { @MainActor [weak self] in
       for await device in selector.activeDeviceStream() {
         guard !Task.isCancelled else { break }
         guard let self else { break }
+        self.activeDeviceID = device
         self.handleDeviceAvailabilityChanged(device != nil)
       }
     }
@@ -1563,6 +1749,9 @@ class StreamSessionViewModel: ObservableObject {
     hasActiveDevice = isAvailable
 
     guard isAvailable else {
+      if onDeviceReconnected != nil {
+        lostDeviceWhileReconnectListenerActive = true
+      }
       cancelStartAttempt()
       recoveryTask?.cancel()
       recoveryTask = nil
@@ -1591,6 +1780,12 @@ class StreamSessionViewModel: ObservableObject {
     // continuation of failures from a disconnected device session.
     recoveryAttempts = 0
     scheduleRecoveryIfNeeded()
+    onDeviceAvailable?()
+
+    if lostDeviceWhileReconnectListenerActive {
+      lostDeviceWhileReconnectListenerActive = false
+      onDeviceReconnected?()
+    }
   }
 
   private func clearPublishedCameraState() {

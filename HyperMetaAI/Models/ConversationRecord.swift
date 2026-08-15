@@ -66,3 +66,15 @@ struct ConversationRecord: Identifiable, Codable {
         }
     }
 }
+
+// MARK: - 继续追问上下文
+
+extension ConversationRecord {
+    /// 继续追问上下文：取最后一条助手回复（去首尾空白）。
+    /// 对话详情页「继续追问」→ 语音页注入；无可用回复时返回 nil（协调器回退到会话/快照上下文）。
+    var followUpContext: String? {
+        guard let lastReply = messages.last(where: { $0.role == .assistant }) else { return nil }
+        let trimmed = lastReply.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}

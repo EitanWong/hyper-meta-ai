@@ -201,18 +201,6 @@ struct HyperMetaAIShortcuts: AppShortcutsProvider {
             systemImageName: "character.bubble.fill"
         )
 
-        // 百科模式
-        AppShortcut(
-            intent: QuickVisionEncyclopediaIntent(),
-            phrases: [
-                "用 \(.applicationName) 介绍这个",
-                "\(.applicationName) 百科识别",
-                "\(.applicationName) 这是什么东西"
-            ],
-            shortTitle: "百科识别",
-            systemImageName: "books.vertical.circle.fill"
-        )
-
         // 实时对话
         AppShortcut(
             intent: LiveAIIntent(),
@@ -226,6 +214,43 @@ struct HyperMetaAIShortcuts: AppShortcutsProvider {
             systemImageName: "brain.head.profile"
         )
 
+        // 语音对话（Agent 统一输入入口）
+        AppShortcut(
+            intent: VoiceAssistantAppIntent(),
+            phrases: [
+                "跟 \(.applicationName) 说话",
+                "用 \(.applicationName) 开始语音对话",
+                "Talk to \(.applicationName)",
+                "Start a voice conversation with \(.applicationName)"
+            ],
+            shortTitle: "语音对话",
+            systemImageName: "waveform.circle.fill"
+        )
+
+        // 问 JARVIS（后台单轮问答，Siri 直接说即可，无需配置快捷指令）
+        AppShortcut(
+            intent: AgentAskAppIntent(),
+            phrases: [
+                "问 \(.applicationName)",
+                "Ask \(.applicationName)",
+                "问 \(.applicationName) 个问题",
+                "Ask \(.applicationName) a question"
+            ],
+            shortTitle: "问 JARVIS",
+            systemImageName: "sparkles"
+        )
+
+        // 查询任务进度
+        AppShortcut(
+            intent: VoiceTaskStatusIntent(),
+            phrases: [
+                "查一下 \(.applicationName) 的任务进度",
+                "Check task progress with \(.applicationName)"
+            ],
+            shortTitle: "任务进度",
+            systemImageName: "checklist"
+        )
+
         // 停止实时对话
         AppShortcut(
             intent: StopLiveAIIntent(),
@@ -237,6 +262,7 @@ struct HyperMetaAIShortcuts: AppShortcutsProvider {
             shortTitle: "停止实时对话",
             systemImageName: "stop.circle.fill"
         )
+
     }
 }
 

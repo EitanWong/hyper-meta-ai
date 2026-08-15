@@ -106,6 +106,11 @@ class LanguageManager: ObservableObject {
         return isChinese ? "Chinese" : "English"
     }
 
+    /// BCP-47 语言码（用于会话记录等持久化元数据）
+    var languageCode: String {
+        return isChinese ? "zh-CN" : "en"
+    }
+
     /// Get TTS voice based on current language
     var ttsVoice: String {
         return isChinese ? "Cherry" : "Ethan"
@@ -128,6 +133,10 @@ class LanguageManager: ObservableObject {
 
     nonisolated static var staticApiLanguageCode: String {
         return staticIsChinese ? "Chinese" : "English"
+    }
+
+    nonisolated static var staticLanguageCode: String {
+        return staticIsChinese ? "zh-CN" : "en"
     }
 
     nonisolated static var staticTtsVoice: String {

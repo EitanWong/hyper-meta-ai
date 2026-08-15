@@ -98,3 +98,43 @@ struct AppShadow {
         return Color.black.opacity(0.15)
     }
 }
+
+private struct PrimaryGlassModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let interactive: Bool
+    let tint: Color?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.glassEffect(
+                Glass.regular
+                    .tint(tint)
+                    .interactive(interactive),
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+        } else {
+            content
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(.white.opacity(0.14), lineWidth: 0.7)
+                }
+        }
+    }
+}
+
+extension View {
+    func primaryGlass(
+        cornerRadius: CGFloat,
+        interactive: Bool = false,
+        tint: Color? = nil
+    ) -> some View {
+        modifier(PrimaryGlassModifier(
+            cornerRadius: cornerRadius,
+            interactive: interactive,
+            tint: tint
+        ))
+    }
+}

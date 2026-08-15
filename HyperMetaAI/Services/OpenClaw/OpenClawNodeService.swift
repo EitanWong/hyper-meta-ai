@@ -104,7 +104,10 @@ final class OpenClawNodeService: NSObject, ObservableObject {
         "camera.snap",
         "camera.list",
         "device.status",
-        "device.info"
+        "device.info",
+        "vision.ocr",
+        "vision.scene",
+        "vision.objects"
     ]
 
     private static let caps = [
@@ -177,8 +180,16 @@ final class OpenClawNodeService: NSObject, ObservableObject {
         print("[OpenClaw] Sent chat message (\(text.utf8.count) bytes)")
     }
 
-    /// Preserve the legacy key so existing conversations remain available after the rename.
-    private var chatSessionKey = "turbometa-chat"
+    /// 当前聊天会话标识（持久化；切换即开启新会话，旧会话仍在网关侧保留）
+    @Published var chatSessionKey: String = {
+        UserDefaults.standard.string(forKey: "openclaw_chat_session") ?? "turbometa-chat"
+    }()
+
+    /// 开启全新会话：生成新的 sessionKey 并持久化
+    func startNewChat() {
+        chatSessionKey = "turbometa-\(UUID().uuidString.prefix(8))"
+        UserDefaults.standard.set(chatSessionKey, forKey: "openclaw_chat_session")
+    }
 
     /// Chat event callback
     var onChatEvent: ((String) -> Void)?

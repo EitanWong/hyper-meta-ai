@@ -31,10 +31,116 @@ class OpenClawCommandRouter {
             return handleDeviceStatus(request)
         case "device.info":
             return handleDeviceInfo(request)
+        case "vision.ocr":
+            return await handleVisionOCR(request)
+        case "vision.scene":
+            return await handleVisionScene(request)
+        case "vision.objects":
+            return await handleVisionObjects(request)
         default:
             return makeError(id: request.id, code: "UNKNOWN_COMMAND",
                            message: "Unsupported command: \(request.command)")
         }
+    }
+
+    // MARK: - vision.ocr / vision.scene
+
+    /// 端侧取词（Apple Vision OCR，离线免费）：抓一帧眼镜画面并识别文字
+    private func handleVisionOCR(_ request: OpenClawNodeInvokeRequest) async -> OpenClawNodeInvokeResult {
+        guard !AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id) else {
+            return makeError(id: request.id, code: "REVOKED",
+                           message: "Vision capture is revoked by the user")
+        }
+        guard let frame = await captureVisionFrame() else {
+            return makeError(id: request.id, code: "NO_FRAME",
+                           message: "No video frame available")
+        }
+        let outcome = await OpenClawVisionCommandRunner.run(kind: .ocr, frame: frame)
+        switch outcome {
+        case .success(let text):
+            return OpenClawNodeInvokeResult(
+                id: request.id,
+                nodeId: nodeId,
+                ok: true,
+                payload: ["text": .string(text)],
+                error: nil
+            )
+        case .failure(.noResult):
+            return makeError(id: request.id, code: "NO_TEXT",
+                           message: "No text recognized in the view")
+        }
+    }
+
+    /// 端侧场景识别（Apple Vision 分类 + 动物识别，离线免费）：抓一帧眼镜画面并理解场景
+    private func handleVisionScene(_ request: OpenClawNodeInvokeRequest) async -> OpenClawNodeInvokeResult {
+        guard !AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id) else {
+            return makeError(id: request.id, code: "REVOKED",
+                           message: "Vision capture is revoked by the user")
+        }
+        guard let frame = await captureVisionFrame() else {
+            return makeError(id: request.id, code: "NO_FRAME",
+                           message: "No video frame available")
+        }
+        let outcome = await OpenClawVisionCommandRunner.run(kind: .scene, frame: frame)
+        switch outcome {
+        case .success(let text):
+            return OpenClawNodeInvokeResult(
+                id: request.id,
+                nodeId: nodeId,
+                ok: true,
+                payload: ["text": .string(text)],
+                error: nil
+            )
+        case .failure(.noResult):
+            return makeError(id: request.id, code: "NO_RESULT",
+                           message: "Could not recognize the scene")
+        }
+    }
+
+    /// 端侧物体识别（Apple Vision 物体检测，离线免费）：抓一帧眼镜画面并列出具体物体
+    private func handleVisionObjects(_ request: OpenClawNodeInvokeRequest) async -> OpenClawNodeInvokeResult {
+        guard !AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id) else {
+            return makeError(id: request.id, code: "REVOKED",
+                           message: "Vision capture is revoked by the user")
+        }
+        guard let frame = await captureVisionFrame() else {
+            return makeError(id: request.id, code: "NO_FRAME",
+                           message: "No video frame available")
+        }
+        let outcome = await OpenClawVisionCommandRunner.run(kind: .objects, frame: frame)
+        switch outcome {
+        case .success(let text):
+            return OpenClawNodeInvokeResult(
+                id: request.id,
+                nodeId: nodeId,
+                ok: true,
+                payload: ["text": .string(text)],
+                error: nil
+            )
+        case .failure(.noResult):
+            return makeError(id: request.id, code: "NO_RESULT",
+                           message: "Could not recognize objects in the view")
+        }
+    }
+
+    /// 抓取一帧眼镜画面（vision 命令共用；与 camera.snap 同源）
+    private func captureVisionFrame() async -> UIImage? {
+        guard let vm = streamViewModel else { return nil }
+        let streamReady = await vm.acquireStream(for: .openClawRemote)
+        guard streamReady else {
+            await vm.releaseStream(for: .openClawRemote)
+            return nil
+        }
+        defer {
+            Task { @MainActor in
+                await vm.releaseStream(for: .openClawRemote)
+            }
+        }
+        let frameDeadline = Date().addingTimeInterval(2)
+        while vm.currentVideoFrame == nil, Date() < frameDeadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return vm.currentVideoFrame
     }
 
     // MARK: - camera.snap
@@ -196,5 +302,41 @@ class OpenClawCommandRouter {
             payload: nil,
             error: OpenClawError(code: code, message: message)
         )
+    }
+}
+
+/// OpenClaw vision 命令的端侧执行（纯逻辑 + Apple Vision，可测）：
+/// 在给定帧上运行取词 / 场景识别，结果文本回传网关并存入跨页复用存储。
+enum OpenClawVisionCommandRunner {
+    enum Kind {
+        case ocr
+        case scene
+        case objects
+    }
+
+    enum Failure: Error, Equatable {
+        case noResult
+    }
+
+    static func run(kind: Kind, frame: UIImage?) async -> Result<String, Failure> {
+        guard let frame else { return .failure(.noResult) }
+        switch kind {
+        case .ocr:
+            let text = await VisionOCRService.recognizedText(in: frame)
+            guard !text.isEmpty else { return .failure(.noResult) }
+            AgentVisionOCRStore.set(text)
+            return .success(text)
+        case .scene:
+            let result = await VisionSceneService.analyze(frame)
+            let summary = VisionSceneTextProcessor.summaryText(from: result)
+            guard !summary.isEmpty else { return .failure(.noResult) }
+            AgentVisionSceneStore.set(summary)
+            return .success(summary)
+        case .objects:
+            let result = await VisionSceneService.analyze(frame)
+            let summary = VisionSceneTextProcessor.objectSummary(from: result)
+            guard !summary.isEmpty else { return .failure(.noResult) }
+            return .success(summary)
+        }
     }
 }

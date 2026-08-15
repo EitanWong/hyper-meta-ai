@@ -10,6 +10,7 @@ enum AudioSessionOwner: Hashable {
     case liveAI
     case liveTranslate
     case openClawASR
+    case qwenVoice
     case textToSpeech
 }
 

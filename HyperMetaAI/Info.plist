@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.lunflux.hyper-meta-ai.briefing-refresh</string>
+		<string>com.lunflux.hyper-meta-ai.task-inspect</string>
+	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -54,12 +59,26 @@
 	</dict>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Needed to connect to Meta AI Glasses</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Hyper Meta AI 需要访问日历，以便为你创建日程（如“把明天的会议加入日历”）并查询安排。</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Hyper Meta AI needs calendar access to create and read your schedule.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>Hyper Meta AI 需要读取健康数据（步数 / 体重 / 睡眠），以便向你汇报每日健康概况。</string>
+	<key>NSHealthUpdateUsageDescription</key>
+	<string>Hyper Meta AI 需要写入健康数据（体重 / 步数 / 跑步），以便记录你口述的健康信息。</string>
+	<key>NSHomeKitUsageDescription</key>
+	<string>Hyper Meta AI 需要访问您的家庭数据，以便通过语音或眼镜控制家中的智能设备（灯、空调、开关等）。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Hyper Meta AI 需要访问本地网络，以连接自建 RTMP 直播服务器与局域网内的 Agent 网关。</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hyper Meta AI 需要访问麦克风以实现与智能眼镜的实时语音对话功能。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Hyper Meta AI 需要访问相册以保存从智能眼镜拍摄的照片。</string>
 	<key>NSSiriUsageDescription</key>
 	<string>Hyper Meta AI 需要 Siri 权限以支持语音快捷指令触发快速识图功能。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Hyper Meta AI 使用设备端语音识别监听「你好千问」唤醒词，无需联网即可唤醒语音助手。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

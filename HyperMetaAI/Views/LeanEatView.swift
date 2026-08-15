@@ -40,11 +40,11 @@ struct LeanEatView: View {
                     .padding()
                 }
             }
-            .navigationTitle("LeanEat 营养分析")
+            .navigationTitle("leaneat.navigationTitle".localized)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") {
+                    Button("common.done".localized) {
                         dismiss()
                     }
                 }
@@ -79,11 +79,11 @@ struct LeanEatView: View {
                 .scaleEffect(1.5)
                 .tint(AppColors.leanEat)
 
-            Text("AI正在分析食物营养...")
+            Text("leaneat.analyzingFood".localized)
                 .font(AppTypography.headline)
                 .foregroundColor(AppColors.textPrimary)
 
-            Text("请稍候，这可能需要几秒钟")
+            Text("leaneat.analyzingWait".localized)
                 .font(AppTypography.caption)
                 .foregroundColor(AppColors.textSecondary)
         }
@@ -98,7 +98,7 @@ struct LeanEatView: View {
                 .font(.system(size: 60))
                 .foregroundColor(.orange)
 
-            Text("分析失败")
+            Text("leaneat.analyzeFailed".localized)
                 .font(AppTypography.title2)
                 .foregroundColor(AppColors.textPrimary)
 
@@ -115,7 +115,7 @@ struct LeanEatView: View {
             } label: {
                 HStack {
                     Image(systemName: "arrow.clockwise")
-                    Text("重试")
+                    Text("common.retry".localized)
                 }
                 .font(AppTypography.headline)
                 .foregroundColor(.white)
@@ -137,11 +137,11 @@ struct LeanEatView: View {
                 .font(.system(size: 60))
                 .foregroundColor(AppColors.leanEat)
 
-            Text("开始分析")
+            Text("leaneat.startAnalyze".localized)
                 .font(AppTypography.title2)
                 .foregroundColor(AppColors.textPrimary)
 
-            Text("点击下方按钮开始分析食物营养")
+            Text("leaneat.startHint".localized)
                 .font(AppTypography.body)
                 .foregroundColor(AppColors.textSecondary)
 
@@ -152,7 +152,7 @@ struct LeanEatView: View {
             } label: {
                 HStack {
                     Image(systemName: "sparkles")
-                    Text("开始分析")
+                    Text("leaneat.startAnalyze".localized)
                 }
                 .font(AppTypography.headline)
                 .foregroundColor(.white)
@@ -196,7 +196,7 @@ struct LeanEatView: View {
 
     private func healthScoreCard(_ nutrition: FoodNutritionResponse) -> some View {
         VStack(spacing: AppSpacing.md) {
-            Text("健康评分")
+            Text("leaneat.healthscore".localized)
                 .font(AppTypography.headline)
                 .foregroundColor(AppColors.textPrimary)
 
@@ -245,7 +245,7 @@ struct LeanEatView: View {
 
     private func totalNutritionCard(_ nutrition: FoodNutritionResponse) -> some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
-            Text("总营养成分")
+            Text("leaneat.totalnutrition.full".localized)
                 .font(AppTypography.headline)
                 .foregroundColor(AppColors.textPrimary)
 
@@ -255,28 +255,28 @@ struct LeanEatView: View {
             ], spacing: AppSpacing.md) {
                 nutritionItem(
                     icon: "flame.fill",
-                    title: "热量",
+                    title: "leaneat.calories".localized,
                     value: nutrition.formattedTotalCalories,
                     color: .orange
                 )
 
                 nutritionItem(
                     icon: "leaf.fill",
-                    title: "蛋白质",
+                    title: "leaneat.protein".localized,
                     value: nutrition.formattedTotalProtein,
                     color: .green
                 )
 
                 nutritionItem(
                     icon: "drop.fill",
-                    title: "脂肪",
+                    title: "leaneat.fat".localized,
                     value: nutrition.formattedTotalFat,
                     color: .yellow
                 )
 
                 nutritionItem(
                     icon: "sparkles",
-                    title: "碳水",
+                    title: "leaneat.carbs".localized,
                     value: nutrition.formattedTotalCarbs,
                     color: .blue
                 )
@@ -312,7 +312,7 @@ struct LeanEatView: View {
 
     private func foodItemsList(_ foods: [FoodItem]) -> some View {
         VStack(alignment: .leading, spacing: AppSpacing.md) {
-            Text("食物明细")
+            Text("leaneat.foodDetail".localized)
                 .font(AppTypography.headline)
                 .foregroundColor(AppColors.textPrimary)
                 .padding(.horizontal)
@@ -359,7 +359,7 @@ struct LeanEatView: View {
 
             // Nutrition details
             HStack(spacing: AppSpacing.lg) {
-                miniNutritionItem(icon: "flame.fill", value: "\(food.calories)", unit: "千卡", color: .orange)
+                miniNutritionItem(icon: "flame.fill", value: "\(food.calories)", unit: "leaneat.kcal".localized, color: .orange)
                 miniNutritionItem(icon: "leaf.fill", value: String(format: "%.1f", food.protein), unit: "g", color: .green)
                 miniNutritionItem(icon: "drop.fill", value: String(format: "%.1f", food.fat), unit: "g", color: .yellow)
                 miniNutritionItem(icon: "sparkles", value: String(format: "%.1f", food.carbs), unit: "g", color: .blue)
@@ -395,7 +395,7 @@ struct LeanEatView: View {
             HStack {
                 Image(systemName: "lightbulb.fill")
                     .foregroundColor(AppColors.leanEat)
-                Text("营养建议")
+                Text("leaneat.suggestions".localized)
                     .font(AppTypography.headline)
                     .foregroundColor(AppColors.textPrimary)
             }

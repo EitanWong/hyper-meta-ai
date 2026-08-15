@@ -6,6 +6,7 @@
 import SwiftUI
 
 struct RecordsView: View {
+    let streamViewModel: StreamSessionViewModel
     @State private var selectedTab = 0
 
     var body: some View {
@@ -14,19 +15,19 @@ struct RecordsView: View {
                 // Custom Tab Bar
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: AppSpacing.lg) {
-                        RecordTabButton(title: "Live AI", isSelected: selectedTab == 0) {
+                        RecordTabButton(title: "records.tab.liveai".localized, isSelected: selectedTab == 0) {
                             selectedTab = 0
                         }
 
-                        RecordTabButton(title: "实时翻译", isSelected: selectedTab == 1) {
+                        RecordTabButton(title: "records.tab.translate".localized, isSelected: selectedTab == 1) {
                             selectedTab = 1
                         }
 
-                        RecordTabButton(title: "LeanEat", isSelected: selectedTab == 2) {
+                        RecordTabButton(title: "records.tab.leaneat".localized, isSelected: selectedTab == 2) {
                             selectedTab = 2
                         }
 
-                        RecordTabButton(title: "WordLearn", isSelected: selectedTab == 3) {
+                        RecordTabButton(title: "records.tab.wordlearn".localized, isSelected: selectedTab == 3) {
                             selectedTab = 3
                         }
 
@@ -41,7 +42,7 @@ struct RecordsView: View {
 
                 // Content
                 TabView(selection: $selectedTab) {
-                    LiveAIRecordsView()
+                    LiveAIRecordsView(streamViewModel: streamViewModel)
                         .tag(0)
 
                     TranslationRecordsView()
@@ -58,7 +59,7 @@ struct RecordsView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .navigationTitle("记录")
+            .navigationTitle("tab.records".localized)
         }
     }
 }
@@ -102,6 +103,7 @@ struct RecordTabButton: View {
 // MARK: - Live AI Records
 
 struct LiveAIRecordsView: View {
+    let streamViewModel: StreamSessionViewModel
     @StateObject private var viewModel = ConversationListViewModel()
     @State private var selectedConversation: ConversationRecord?
     @State private var showDetail = false
@@ -118,39 +120,61 @@ struct LiveAIRecordsView: View {
                         .font(.system(size: 64))
                         .foregroundColor(AppColors.liveAI.opacity(0.6))
 
-                    Text("暂无 Live AI 对话记录")
+                    Text("records.empty.liveai".localized)
                         .font(AppTypography.title2)
                         .foregroundColor(AppColors.textPrimary)
 
-                    Text("使用 Live AI 功能后记录将显示在这里")
+                    Text("records.empty.liveaiHint".localized)
                         .font(AppTypography.subheadline)
                         .foregroundColor(AppColors.textSecondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, AppSpacing.xl)
                 }
             } else {
-                // Conversation list
-                ScrollView {
-                    LazyVStack(spacing: AppSpacing.md) {
-                        ForEach(viewModel.conversations) { conversation in
-                            ConversationCell(conversation: conversation)
-                                .onTapGesture {
-                                    selectedConversation = conversation
-                                    showDetail = true
-                                }
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        viewModel.deleteConversation(conversation.id)
-                                    } label: {
-                                        Label("删除", systemImage: "trash")
-                                    }
-                                }
-                        }
+                // 按 Agent 筛选
+                Picker("", selection: $viewModel.selectedFilter) {
+                    ForEach(ConversationAgentFilter.allCases) { filter in
+                        Text(filter.displayName).tag(filter)
                     }
-                    .padding(AppSpacing.md)
                 }
-                .refreshable {
-                    viewModel.loadConversations()
+                .pickerStyle(.segmented)
+                .padding(.horizontal, AppSpacing.md)
+                .padding(.top, AppSpacing.sm)
+
+                if viewModel.filteredConversations.isEmpty {
+                    VStack(spacing: AppSpacing.md) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 40))
+                            .foregroundColor(AppColors.textTertiary)
+                        Text("records.filter.empty".localized)
+                            .font(AppTypography.subheadline)
+                            .foregroundColor(AppColors.textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // Conversation list
+                    ScrollView {
+                        LazyVStack(spacing: AppSpacing.md) {
+                            ForEach(viewModel.filteredConversations) { conversation in
+                                ConversationCell(conversation: conversation)
+                                    .onTapGesture {
+                                        selectedConversation = conversation
+                                        showDetail = true
+                                    }
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button(role: .destructive) {
+                                            viewModel.deleteConversation(conversation.id)
+                                        } label: {
+                                            Label("common.delete".localized, systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
+                        .padding(AppSpacing.md)
+                    }
+                    .refreshable {
+                        viewModel.loadConversations()
+                    }
                 }
             }
         }
@@ -159,7 +183,7 @@ struct LiveAIRecordsView: View {
         }
         .sheet(isPresented: $showDetail) {
             if let conversation = selectedConversation {
-                ConversationDetailView(conversation: conversation)
+                ConversationDetailView(conversation: conversation, streamViewModel: streamViewModel)
             }
         }
     }
@@ -170,6 +194,12 @@ struct LiveAIRecordsView: View {
 @MainActor
 class ConversationListViewModel: ObservableObject {
     @Published var conversations: [ConversationRecord] = []
+    @Published var selectedFilter: ConversationAgentFilter = .all
+
+    /// 按当前 Agent 筛选后的会话列表
+    var filteredConversations: [ConversationRecord] {
+        ConversationAgentFilter.filter(conversations, by: selectedFilter)
+    }
 
     func loadConversations() {
         conversations = ConversationStorage.shared.loadAllConversations()
@@ -182,6 +212,52 @@ class ConversationListViewModel: ObservableObject {
     }
 }
 
+// MARK: - Conversation Agent Filter
+
+/// 按 Agent 筛选对话记录（纯逻辑，可测）
+enum ConversationAgentFilter: String, CaseIterable, Identifiable {
+    case all
+    case openclaw
+    case hermes
+    case qwen
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .all: return "records.filter.all".localized
+        case .openclaw: return AgentKind.openclaw.displayName
+        case .hermes: return AgentKind.hermes.displayName
+        case .qwen: return "Qwen"
+        }
+    }
+
+    /// 记录是否属于该筛选
+    static func matches(_ record: ConversationRecord, filter: ConversationAgentFilter) -> Bool {
+        switch filter {
+        case .all: return true
+        case .openclaw: return record.aiModel == AgentKind.openclaw.displayName
+        case .hermes: return record.aiModel == AgentKind.hermes.displayName
+        case .qwen: return record.aiModel == "qwen-audio-agent"
+        }
+    }
+
+    static func filter(
+        _ records: [ConversationRecord],
+        by filter: ConversationAgentFilter
+    ) -> [ConversationRecord] {
+        records.filter { matches($0, filter: filter) }
+    }
+
+    /// 会话对应的 Agent 图标（列表展示用）
+    static func iconName(for record: ConversationRecord) -> String {
+        if record.aiModel == AgentKind.openclaw.displayName { return "link.circle.fill" }
+        if record.aiModel == AgentKind.hermes.displayName { return "wand.and.stars" }
+        if record.aiModel == AgentAskArchiver.aiModel { return "sparkles" }
+        return "waveform"
+    }
+}
+
 // MARK: - Conversation Cell
 
 struct ConversationCell: View {
@@ -191,8 +267,16 @@ struct ConversationCell: View {
         VStack(alignment: .leading, spacing: AppSpacing.sm) {
             // Header
             HStack {
-                Image(systemName: "brain.head.profile")
-                    .foregroundColor(AppColors.liveAI)
+                Image(systemName: ConversationAgentFilter.iconName(for: conversation))
+                    .foregroundColor(
+                        conversation.aiModel == AgentKind.openclaw.displayName
+                            ? Color.purple
+                            : conversation.aiModel == AgentKind.hermes.displayName
+                                ? Color.teal
+                                : conversation.aiModel == AgentAskArchiver.aiModel
+                                    ? Color.orange
+                                    : AppColors.liveAI
+                    )
                     .font(AppTypography.headline)
 
                 Text(conversation.title)
@@ -228,7 +312,7 @@ struct ConversationCell: View {
                 HStack(spacing: AppSpacing.xs) {
                     Image(systemName: "bubble.left.and.bubble.right")
                         .font(AppTypography.caption)
-                    Text("\(conversation.messageCount) 条消息")
+                    Text(String(format: "conversation.messageCount".localized, conversation.messageCount))
                         .font(AppTypography.caption)
                 }
                 .foregroundColor(AppColors.textSecondary)
@@ -256,11 +340,11 @@ struct TranslationRecordsView: View {
                     .font(.system(size: 64))
                     .foregroundColor(AppColors.translate.opacity(0.6))
 
-                Text("暂无翻译记录")
+                Text("records.empty.translate".localized)
                     .font(AppTypography.title2)
                     .foregroundColor(AppColors.textPrimary)
 
-                Text("功能即将上线")
+                Text("records.comingSoon".localized)
                     .font(AppTypography.subheadline)
                     .foregroundColor(AppColors.textSecondary)
             }
@@ -281,11 +365,11 @@ struct LeanEatRecordsView: View {
                     .font(.system(size: 64))
                     .foregroundColor(AppColors.leanEat.opacity(0.6))
 
-                Text("暂无卡路里识别记录")
+                Text("records.empty.calories".localized)
                     .font(AppTypography.title2)
                     .foregroundColor(AppColors.textPrimary)
 
-                Text("功能即将上线")
+                Text("records.comingSoon".localized)
                     .font(AppTypography.subheadline)
                     .foregroundColor(AppColors.textSecondary)
             }
@@ -306,11 +390,11 @@ struct WordLearnRecordsView: View {
                     .font(.system(size: 64))
                     .foregroundColor(AppColors.wordLearn.opacity(0.6))
 
-                Text("暂无单词学习记录")
+                Text("records.empty.vocabulary".localized)
                     .font(AppTypography.title2)
                     .foregroundColor(AppColors.textPrimary)
 
-                Text("功能即将上线")
+                Text("records.comingSoon".localized)
                     .font(AppTypography.subheadline)
                     .foregroundColor(AppColors.textSecondary)
             }
@@ -444,5 +528,5 @@ struct QuickVisionRecordCell: View {
 }
 
 #Preview("Records") {
-  RecordsView()
+  RecordsView(streamViewModel: PreviewDependencies().streamViewModel)
 }

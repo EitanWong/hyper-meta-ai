@@ -4,6 +4,7 @@
  */
 
 import SwiftUI
+import UIKit
 import MWDATCore
 
 struct SettingsView: View {
@@ -23,7 +24,13 @@ struct SettingsView: View {
     @State private var showQuickVisionSettings = false
     @State private var showLiveAISettings = false
     @State private var showLiveTranslateSettings = false
-    @State private var showOpenClawSettings = false
+    @State private var showAgentSettings = false
+    @ObservedObject private var notificationButler = AgentNotificationButler.shared
+    @State private var showDiagnostics = false
+    @State private var focusAuthorization = SystemFocusService.shared.authorization
+    /// 深链进入 Agent 设置时定位的分区
+    @State private var agentSettingsSection: AgentSettingsSection?
+    @ObservedObject private var navigationRouter = AppNavigationRouter.shared
     @ObservedObject var quickVisionModeManager = QuickVisionModeManager.shared
     @ObservedObject var liveAIModeManager = LiveAIModeManager.shared
     @State private var selectedModel = "qwen3-omni-flash-realtime"
@@ -35,6 +42,84 @@ struct SettingsView: View {
     init(streamViewModel: StreamSessionViewModel, apiKey: String) {
         self.streamViewModel = streamViewModel
         self.apiKey = apiKey
+    }
+
+    // 通知播报偏好直连 UserDefaults（选择即时持久化）
+    private var notificationModeBinding: Binding<AgentNotificationMode> {
+        Binding(
+            get: { AgentNotificationSettings.mode },
+            set: { AgentNotificationSettings.mode = $0 }
+        )
+    }
+
+    private var notificationPrivacyBinding: Binding<AgentNotificationPrivacy> {
+        Binding(
+            get: { AgentNotificationSettings.privacy },
+            set: { AgentNotificationSettings.privacy = $0 }
+        )
+    }
+
+    private var greetingEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { AgentConnectGreetingSettings.enabled },
+            set: { AgentConnectGreetingSettings.enabled = $0 }
+        )
+    }
+
+    private var greetingScheduleBinding: Binding<Bool> {
+        Binding(
+            get: { AgentConnectGreetingSettings.includeSchedule },
+            set: { AgentConnectGreetingSettings.includeSchedule = $0 }
+        )
+    }
+
+    private var greetingRemindersBinding: Binding<Bool> {
+        Binding(
+            get: { AgentConnectGreetingSettings.includeReminders },
+            set: { AgentConnectGreetingSettings.includeReminders = $0 }
+        )
+    }
+
+    private var greetingTasksBinding: Binding<Bool> {
+        Binding(
+            get: { AgentConnectGreetingSettings.includeTasks },
+            set: { AgentConnectGreetingSettings.includeTasks = $0 }
+        )
+    }
+
+    private var greetingUnreadBinding: Binding<Bool> {
+        Binding(
+            get: { AgentConnectGreetingSettings.includeUnread },
+            set: { AgentConnectGreetingSettings.includeUnread = $0 }
+        )
+    }
+
+    private var focusRespectBinding: Binding<Bool> {
+        Binding(
+            get: { AgentFocusSettings.respect() },
+            set: { AgentFocusSettings.setRespect($0) }
+        )
+    }
+
+    private var focusPauseNotificationsBinding: Binding<Bool> {
+        Binding(
+            get: { AgentFocusSettings.pauseNotifications() },
+            set: { AgentFocusSettings.setPauseNotifications($0) }
+        )
+    }
+
+    private var focusMuteTTSBinding: Binding<Bool> {
+        Binding(
+            get: { AgentFocusSettings.muteProactiveTTS() },
+            set: { AgentFocusSettings.setMuteProactiveTTS($0) }
+        )
+    }
+
+    private var taskNotifyEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { AgentTaskNotificationSettings.enabled() },
+            set: { AgentTaskNotificationSettings.setEnabled($0) }
+        )
     }
 
     // 刷新 API Key 状态
@@ -86,8 +171,124 @@ struct SettingsView: View {
                         // InfoRow(title: "电量", value: "85%")
                         // InfoRow(title: "固件版本", value: "v20.0")
                     }
+
+                    // JARVIS 触发中心
+                    NavigationLink {
+                        AgentWearablesHubView(streamViewModel: streamViewModel)
+                    } label: {
+                        HStack {
+                            Image(systemName: "sparkles")
+                                .foregroundColor(AppColors.primary)
+                            Text("agent.wearable.hub.title".localized)
+                                .foregroundColor(AppColors.textPrimary)
+                        }
+                        .padding(.vertical, AppSpacing.sm)
+                    }
                 } header: {
                     Text("settings.device".localized)
+                }
+
+                // 通知播报管家
+                Section {
+                    Picker("agent.notify.settings.mode".localized, selection: notificationModeBinding) {
+                        ForEach(AgentNotificationMode.allCases, id: \.self) { mode in
+                            Text(mode.displayName).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    Picker("agent.notify.settings.privacy".localized, selection: notificationPrivacyBinding) {
+                        ForEach(AgentNotificationPrivacy.allCases, id: \.self) { privacy in
+                            Text(privacy.displayName).tag(privacy)
+                        }
+                    }
+                    .pickerStyle(.menu)
+
+                    if let last = AgentNotificationButler.shared.lastAnnouncement {
+                        HStack(spacing: 8) {
+                            Image(systemName: "waveform.circle.fill")
+                                .foregroundColor(AppColors.primary)
+                            Text(last)
+                                .font(AppTypography.caption)
+                                .foregroundColor(AppColors.textSecondary)
+                                .lineLimit(2)
+                        }
+                    }
+                } header: {
+                    Text("agent.notify.settings.header".localized)
+                } footer: {
+                    Text("agent.notify.settings.footer".localized)
+                }
+
+                // 后台任务通知
+                Section {
+                    Toggle("agent.task.notify.settings.toggle".localized, isOn: taskNotifyEnabledBinding)
+                } header: {
+                    Text("agent.task.notify.settings.header".localized)
+                } footer: {
+                    Text("agent.task.notify.settings.footer".localized)
+                }
+
+                // 眼镜连接问候
+                Section {
+                    Toggle("agent.connect.settings.enabled".localized, isOn: greetingEnabledBinding)
+                    Toggle("agent.connect.settings.schedule".localized, isOn: greetingScheduleBinding)
+                    Toggle("agent.connect.settings.reminders".localized, isOn: greetingRemindersBinding)
+                    Toggle("agent.connect.settings.tasks".localized, isOn: greetingTasksBinding)
+                    Toggle("agent.connect.settings.unread".localized, isOn: greetingUnreadBinding)
+                } header: {
+                    Text("agent.connect.settings.header".localized)
+                } footer: {
+                    Text("agent.connect.settings.footer".localized)
+                }
+
+                // 专注模式（JARVIS 尊重系统专注模式，主动打扰自动避让）
+                Section {
+                    Toggle("agent.focus.respect".localized, isOn: focusRespectBinding)
+                    if AgentFocusSettings.respect() {
+                        Toggle("agent.focus.pause.notifications".localized, isOn: focusPauseNotificationsBinding)
+                        Toggle("agent.focus.mute.tts".localized, isOn: focusMuteTTSBinding)
+
+                        switch focusAuthorization {
+                        case .authorized:
+                            Label {
+                                Text("agent.focus.auth.authorized".localized)
+                                    .foregroundColor(AppColors.textPrimary)
+                            } icon: {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(.green)
+                            }
+                        case .notDetermined:
+                            Button {
+                                Task {
+                                    focusAuthorization = await SystemFocusService.shared.requestAuthorization()
+                                }
+                            } label: {
+                                Label("agent.focus.auth.request".localized, systemImage: "lock.open.fill")
+                                    .foregroundColor(AppColors.textPrimary)
+                            }
+                        case .denied, .restricted:
+                            Button {
+                                if let url = URL(string: UIApplication.openSettingsURLString) {
+                                    UIApplication.shared.open(url)
+                                }
+                            } label: {
+                                Label("agent.focus.auth.openSettings".localized, systemImage: "gear")
+                                    .foregroundColor(AppColors.textPrimary)
+                            }
+                        case .unknown:
+                            Text("agent.focus.auth.unknown".localized)
+                                .font(AppTypography.caption)
+                                .foregroundColor(AppColors.textSecondary)
+                        }
+                    }
+                } header: {
+                    Text("agent.focus.section".localized)
+                } footer: {
+                    Text("agent.focus.footer".localized)
+                }
+                .onAppear {
+                    focusAuthorization = SystemFocusService.shared.authorization
                 }
 
                 // AI 设置
@@ -253,7 +454,7 @@ struct SettingsView: View {
                             HStack {
                                 Image(systemName: "key.fill")
                                     .foregroundColor(.orange)
-                                Text("Google API Key")
+                                Text("settings.apikey.google.title".localized)
                                     .foregroundColor(AppColors.textPrimary)
                                 Spacer()
                                 Text(hasGoogleAPIKey ? "settings.apikey.configured".localized : "settings.apikey.notconfigured".localized)
@@ -304,22 +505,22 @@ struct SettingsView: View {
                     Text("settings.liveai".localized)
                 }
 
-                // OpenClaw
+                // Agents
                 Section {
                     Button {
-                        showOpenClawSettings = true
+                        showAgentSettings = true
                     } label: {
                         HStack {
-                            Image(systemName: "link.circle.fill")
+                            Image(systemName: "square.stack.3d.up.fill")
                                 .foregroundColor(.purple)
-                            Text("OpenClaw")
+                            Text("settings.agents".localized)
                                 .foregroundColor(AppColors.textPrimary)
                             Spacer()
                             HStack(spacing: 4) {
                                 Circle()
-                                    .fill(openClawStatusColor)
+                                    .fill(agentsStatusColor)
                                     .frame(width: 8, height: 8)
-                                Text(openClawStatusText)
+                                Text(agentsStatusText)
                                     .font(AppTypography.caption)
                                     .foregroundColor(AppColors.textSecondary)
                             }
@@ -334,6 +535,20 @@ struct SettingsView: View {
 
                 // 关于
                 Section {
+                    Button {
+                        showDiagnostics = true
+                    } label: {
+                        HStack {
+                            Image(systemName: "stethoscope")
+                                .foregroundColor(.teal)
+                            Text("settings.diagnostics.title".localized)
+                                .foregroundColor(AppColors.textPrimary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(AppTypography.caption)
+                                .foregroundColor(AppColors.textTertiary)
+                        }
+                    }
                     InfoRow(title: "settings.version".localized, value: "2.0.0")
                     InfoRow(title: "settings.sdkversion".localized, value: "0.5.0")
                 } header: {
@@ -395,32 +610,54 @@ struct SettingsView: View {
             .sheet(isPresented: $showLiveTranslateSettings) {
                 LiveTranslateSettingsView(viewModel: LiveTranslateViewModel())
             }
-            .sheet(isPresented: $showOpenClawSettings) {
-                OpenClawSettingsView()
+            .sheet(isPresented: $showAgentSettings) {
+                AgentSettingsView(initialSection: agentSettingsSection)
+                    .onDisappear {
+                        agentSettingsSection = nil
+                    }
+            }
+            .sheet(isPresented: $showDiagnostics) {
+                AgentDiagnosticsView()
             }
             .onAppear {
                 // 视图出现时刷新 API Key 状态
                 refreshAPIKeyStatus()
+                consumeNavigationIfNeeded()
+            }
+            .onChange(of: navigationRouter.pendingDestination) { _, _ in
+                consumeNavigationIfNeeded()
             }
         }
     }
 
-    private var openClawStatusColor: Color {
-        switch OpenClawNodeService.shared.connectionState {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .waitingForPairing: return .yellow
-        default: return .gray
-        }
+    /// 消费系统入口的导航请求（如通知点按 → 提醒管理）
+    private func consumeNavigationIfNeeded() {
+        guard case .agentSettings(let section)? = navigationRouter.consume(where: {
+            if case .agentSettings = $0 { return true }
+            return false
+        }) else { return }
+        agentSettingsSection = section
+        showAgentSettings = true
     }
 
-    private var openClawStatusText: String {
-        switch OpenClawNodeService.shared.connectionState {
-        case .connected: return "openclaw.status.connected".localized
-        case .connecting: return "openclaw.status.connecting".localized
-        case .disconnected: return "openclaw.status.disconnected".localized
-        default: return "openclaw.status.disconnected".localized
-        }
+    private var agentsStatusColor: Color {
+        let openClaw = AgentConnectionState.map(OpenClawNodeService.shared.connectionState)
+        let hermes = AgentConnectionState.map(HermesService.shared.connectionState)
+        if openClaw.isOnline || hermes.isOnline { return .green }
+        if openClaw.isBusy || hermes.isBusy { return .orange }
+        if case .waitingForPairing = openClaw { return .yellow }
+        if case .failed = openClaw { return .red }
+        if case .failed = hermes { return .red }
+        return .gray
+    }
+
+    private var agentsStatusText: String {
+        let openClaw = AgentConnectionState.map(OpenClawNodeService.shared.connectionState)
+        let hermes = AgentConnectionState.map(HermesService.shared.connectionState)
+        if openClaw.isOnline || hermes.isOnline { return "agents.status.connected".localized }
+        if openClaw.isBusy || hermes.isBusy { return "agents.status.connecting".localized }
+        if case .waitingForPairing = openClaw { return "agents.status.pairing".localized }
+        return "agents.status.disconnected".localized
     }
 
     private func languageDisplayName(_ code: String) -> String {
@@ -437,10 +674,10 @@ struct SettingsView: View {
 
     private func qualityDisplayName(_ code: String) -> String {
         switch code {
-        case "low": return "低画质"
-        case "medium": return "中画质"
-        case "high": return "高画质"
-        default: return "中画质"
+        case "low": return "settings.quality.low".localized
+        case "medium": return "settings.quality.medium".localized
+        case "high": return "settings.quality.high".localized
+        default: return "settings.quality.medium".localized
         }
     }
 }
@@ -907,16 +1144,16 @@ struct LanguageSettingsView: View {
                         }
                     }
                 } header: {
-                    Text("选择输出语言")
+                    Text("settings.outputLanguage".localized)
                 } footer: {
-                    Text("AI 将使用该语言进行语音输出和文字回复")
+                    Text("settings.outputLanguage.footer".localized)
                 }
             }
-            .navigationTitle("输出语言")
+            .navigationTitle("settings.outputLanguageTitle".localized)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("完成") {
+                    Button("common.done".localized) {
                         dismiss()
                     }
                 }
@@ -1157,7 +1394,7 @@ struct GoogleAPIKeySettingsView: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                 } header: {
-                    Text("Google Gemini API Key")
+                    Text("settings.apikey.gemini.title".localized)
                 } footer: {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("settings.apikey.google.help".localized)

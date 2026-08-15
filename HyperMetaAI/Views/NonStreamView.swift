@@ -58,11 +58,11 @@ struct NonStreamView: View {
             .aspectRatio(contentMode: .fit)
             .frame(width: 120)
 
-          Text("Stream Your Glasses Camera")
+          Text("nonstream.title".localized)
             .font(.system(size: 20, weight: .semibold))
             .foregroundColor(.white)
 
-          Text("Tap the Start streaming button to stream video from your glasses or use the camera button to take a photo from your glasses.")
+          Text("nonstream.hint".localized)
             .font(.system(size: 15))
             .multilineTextAlignment(.center)
             .foregroundColor(.white)
@@ -78,7 +78,7 @@ struct NonStreamView: View {
             .foregroundColor(.white.opacity(0.7))
             .frame(width: 16, height: 16)
 
-          Text("Waiting for an active device")
+          Text("nonstream.waiting".localized)
             .font(.system(size: 14))
             .foregroundColor(.white.opacity(0.7))
         }
@@ -133,7 +133,7 @@ struct GettingStartedSheetView: View {
 
   var body: some View {
     VStack(spacing: 24) {
-      Text("Getting started")
+      Text("nonstream.gettingStarted".localized)
         .font(.system(size: 18, weight: .semibold))
         .foregroundColor(.primary)
 

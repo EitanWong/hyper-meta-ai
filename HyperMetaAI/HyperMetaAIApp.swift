@@ -16,9 +16,11 @@
 //
 
 import Foundation
+import CoreSpotlight
 import MWDATCore
 import SwiftUI
 import UIKit
+import UserNotifications
 
 enum UnitTestRuntime {
   static var isActive: Bool {
@@ -36,6 +38,86 @@ enum WearablesBootstrapState {
   case testing
   case ready(wearables: WearablesInterface, viewModel: WearablesViewModel)
   case failed(String)
+}
+
+private struct UnavailableWearablesListenerToken: AnyListenerToken {
+  func cancel() async {}
+}
+
+/// Keeps the assistant usable when the optional glasses SDK cannot initialize.
+private final class UnavailableWearables: WearablesInterface, @unchecked Sendable {
+  let registrationState: RegistrationState = .unavailable
+  let devices: [DeviceIdentifier] = []
+
+  func addRegistrationStateListener(
+    _ listener: @escaping @Sendable (RegistrationState) -> Void
+  ) -> any AnyListenerToken {
+    listener(registrationState)
+    return UnavailableWearablesListenerToken()
+  }
+
+  func registrationStateStream() -> AsyncStream<RegistrationState> {
+    AsyncStream { continuation in
+      continuation.yield(registrationState)
+      continuation.finish()
+    }
+  }
+
+  func startRegistration() async throws(RegistrationError) {
+    throw .configurationInvalid
+  }
+
+  func handleUrl(_ url: URL) async throws(WearablesHandleURLError) -> Bool {
+    false
+  }
+
+  func startUnregistration() async throws(UnregistrationError) {
+    throw .configurationInvalid
+  }
+
+  func openFirmwareUpdate() async throws(NavigationError) {
+    throw .notRegistered
+  }
+
+  func openDATGlassesAppUpdate() async throws(NavigationError) {
+    throw .notRegistered
+  }
+
+  func addDevicesListener(
+    _ listener: @escaping @Sendable ([DeviceIdentifier]) -> Void
+  ) -> any AnyListenerToken {
+    listener([])
+    return UnavailableWearablesListenerToken()
+  }
+
+  func devicesStream() -> AsyncStream<[DeviceIdentifier]> {
+    AsyncStream { continuation in
+      continuation.yield([])
+      continuation.finish()
+    }
+  }
+
+  func deviceForIdentifier(_ identifier: DeviceIdentifier) -> Device? {
+    nil
+  }
+
+  func checkPermissionStatus(_ permission: Permission) async throws(PermissionError) -> PermissionStatus {
+    .denied
+  }
+
+  func requestPermission(_ permission: Permission) async throws(PermissionError) -> PermissionStatus {
+    throw .noDevice
+  }
+
+  func createSession(deviceSelector: any DeviceSelector) throws(DeviceSessionError) -> DeviceSession {
+    throw .noEligibleDevice
+  }
+
+  func deviceStateStream(for identifier: DeviceIdentifier) -> AsyncStream<DeviceState> {
+    AsyncStream { continuation in
+      continuation.finish()
+    }
+  }
 }
 
 @MainActor
@@ -70,18 +152,28 @@ final class WearablesBootstrap: ObservableObject {
       print("[Hyper Meta AI] Wearables SDK configured successfully")
     } catch {
       let message = "Wearables SDK configuration failed: \(error.localizedDescription)"
-      state = .failed(message)
-      print("[Hyper Meta AI] \(message)")
+      let wearables = UnavailableWearables()
+      state = .ready(
+        wearables: wearables,
+        viewModel: WearablesViewModel(wearables: wearables)
+      )
+      print("[Hyper Meta AI] \(message). Continuing without glasses.")
     }
   }
 }
 
 @main
 struct HyperMetaAIApp: App {
+  /// 主屏长按快捷操作（Quick Actions）桥接
+  @UIApplicationDelegateAdaptor(HomeScreenShortcutAppDelegate.self) private var shortcutDelegate
   @StateObject private var bootstrap: WearablesBootstrap
 
   init() {
     _bootstrap = StateObject(wrappedValue: WearablesBootstrap())
+    // 提醒通知前台到达时同步到镜片并播报（无权限请求，仅注册代理）
+    UNUserNotificationCenter.current().delegate = AgentReminderNotificationDelegate.shared
+    // 注册提醒通知的交互 Action（稍后提醒 / 完成）
+    AgentReminderNotificationAction.register()
   }
 
   var body: some Scene {
@@ -90,6 +182,13 @@ struct HyperMetaAIApp: App {
       case let .ready(wearables, viewModel):
         // Keep the app's UI and URL callback on the same SDK instance.
         MainAppView(wearables: wearables, viewModel: viewModel)
+          .onContinueUserActivity(CSSearchableItemActionType) { activity in
+            // Spotlight 搜索结果点按（冷 / 热启动均可能经 SwiftUI 场景分发）
+            guard let identifier = activity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+                  let destination = SpotlightIdentifierParser.destination(for: identifier)
+            else { return }
+            AppNavigationRouter.shared.request(destination.navigationDestination)
+          }
           .alert(
             "Error",
             isPresented: Binding(
@@ -113,6 +212,16 @@ struct HyperMetaAIApp: App {
             Text(viewModel.errorMessage)
           }
           .onOpenURL { url in
+            // JARVIS URL 命令协议：trigger / ask / lens / briefing
+            if let command = AgentURLCommandParser.parse(url: url) {
+              Task { @MainActor in
+                await AgentURLCommandRouter.dispatch(
+                  command,
+                  executor: SystemAgentURLCommandExecutor.shared
+                )
+              }
+              return
+            }
             guard let scheme = url.scheme?.lowercased(), ["hypermetaai", "turbometa"].contains(scheme) else {
               return
             }
@@ -146,7 +255,6 @@ struct HyperMetaAIApp: App {
   }
 }
 
-#if DEBUG
 @MainActor
 final class PreviewDependencies: ObservableObject {
   let wearables: WearablesInterface
@@ -167,4 +275,3 @@ final class PreviewDependencies: ObservableObject {
     wearablesViewModel.registrationState = .registered
   }
 }
-#endif

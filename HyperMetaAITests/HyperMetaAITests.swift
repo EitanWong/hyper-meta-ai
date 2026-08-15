@@ -222,6 +222,22 @@ final class ViewModelIntegrationTests: XCTestCase {
     await viewModel.shutdown()
   }
 
+  func testOnDeviceAvailableFiresWhenGlassesConnect() async throws {
+    let viewModel = StreamSessionViewModel(wearables: Wearables.shared)
+    let expectation = expectation(description: "onDeviceAvailable fired")
+    var didFire = false
+    viewModel.onDeviceAvailable = {
+      guard !didFire else { return }
+      didFire = true
+      expectation.fulfill()
+    }
+
+    let becameAvailable = await waitUntil { viewModel.hasActiveDevice }
+    XCTAssertTrue(becameAvailable)
+    await fulfillment(of: [expectation], timeout: 5)
+    await viewModel.shutdown()
+  }
+
   func testCaptouchPauseWaitsForTheDeviceToResume() async throws {
     guard let camera = cameraKit, let mockDevice else {
       XCTFail("Mock device and camera should be available")

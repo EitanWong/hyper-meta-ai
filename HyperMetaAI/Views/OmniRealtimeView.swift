@@ -118,8 +118,8 @@ struct OmniRealtimeView: View {
                   let frame else { return }
             viewModel.updateVideoFrame(frame)
         }
-        .alert("错误", isPresented: $viewModel.showError) {
-            Button("确定") {
+        .alert("vision.errorTitle".localized, isPresented: $viewModel.showError) {
+            Button("common.confirm".localized) {
                 viewModel.dismissError()
             }
         } message: {
@@ -133,7 +133,7 @@ struct OmniRealtimeView: View {
 
     private var headerView: some View {
         HStack {
-            Text("AI 实时对话")
+            Text("omni.realtime.title".localized)
                 .font(.headline)
                 .foregroundColor(.white)
 
@@ -172,7 +172,7 @@ struct OmniRealtimeView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "waveform")
                         .foregroundColor(.green)
-                    Text("正在说话...")
+                    Text("omni.speaking".localized)
                         .font(.caption)
                         .foregroundColor(.white)
                 }
@@ -188,14 +188,14 @@ struct OmniRealtimeView: View {
                     Circle()
                         .fill(Color.red)
                         .frame(width: 8, height: 8)
-                    Text("录音中")
+                    Text("omni.recording".localized)
                         .font(.caption)
                         .foregroundColor(.white)
                 } else {
                     Circle()
                         .fill(Color.gray)
                         .frame(width: 8, height: 8)
-                    Text("未录音")
+                    Text("omni.notRecording".localized)
                         .font(.caption)
                         .foregroundColor(.white)
                 }
