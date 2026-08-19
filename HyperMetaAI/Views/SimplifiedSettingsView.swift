@@ -12,7 +12,6 @@ struct SimplifiedSettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedBrain = AgentBrainSettings.selected
-    @State private var selectedModelID = QwenRealtimeModelCatalog.selected.id
     @State private var presenceEnabled = AgentPresenceSettings.presenceEnabled
     @State private var visionEnabled = AgentVisionSettings.injectionEnabled
     @State private var wakeWordEnabled = QwenVoiceSession.wakeWordEnabled
@@ -83,14 +82,8 @@ struct SimplifiedSettingsView: View {
                     }
                     .foregroundStyle(.primary)
 
-                    Picker("assistant.settings.voice.model".localized, selection: $selectedModelID) {
-                        ForEach(QwenRealtimeModelCatalog.all) { profile in
-                            Text(profile.displayName).tag(profile.id)
-                        }
-                    }
-                    .onChange(of: selectedModelID) { _, modelID in
-                        QwenRealtimeModelCatalog.setSelected(modelID)
-                    }
+                    // 模型选择在「语音服务」里：换模型必须重连才生效，
+                    // 那个 sheet 的保存路径会 restart 会话，这里改则是静默失效。
                     Picker("assistant.settings.agent.brain".localized, selection: $selectedBrain) {
                         ForEach(AgentBrain.allCases) { brain in
                             Label(brain.displayName, systemImage: brain.symbolName).tag(brain)

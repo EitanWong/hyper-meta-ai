@@ -1459,7 +1459,6 @@
 "agent.share.list.name" = "Shared";
 "qwen.wakeword.title" = "Voice wake word";
 "qwen.wakeword.subtitle" = "Say \"你好千问\" to wake the assistant while sleeping.";
-"qwen.wakeword.footer" = "Uses on-device speech recognition. When the voice session sleeps, say the wake word to wake it up.";
 "qwen.wakeword.listening" = "Listening for “你好千问”";
 "qwen.wakeword.sleeping" = "Sleeping";
 "qwen.wakeword.wake" = "Wake";
@@ -1734,7 +1733,6 @@
 "assistant.settings.conversation" = "Conversation";
 "assistant.settings.controls" = "Interaction";
 "assistant.settings.voice.service" = "Voice Service";
-"assistant.settings.voice.model" = "Voice Model";
 "assistant.settings.agent" = "Agent";
 "assistant.settings.agent.brain" = "Task Agent";
 "assistant.settings.agent.presence" = "Continuous Conversation";

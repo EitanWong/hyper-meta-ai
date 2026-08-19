@@ -11,7 +11,6 @@ struct QwenGatewayConfigSheetView: View {
     @State private var draft = QwenGatewayDraft()
     @State private var idleAutoEnd = QwenVoiceSession.idleAutoEndEnabled
     @State private var realtimeModelID = QwenRealtimeModelCatalog.selected.id
-    @State private var wakeWordEnabled = QwenVoiceSession.wakeWordEnabled
 
     let onSave: () -> Void
 
@@ -39,11 +38,9 @@ struct QwenGatewayConfigSheetView: View {
                     Text("qwen.realtime.footer".localized)
                 }
 
-                Section {
-                    Toggle("qwen.wakeword.title".localized, isOn: $wakeWordEnabled)
-                } footer: {
-                    Text("qwen.wakeword.footer".localized)
-                }
+                // 唤醒词开关不在这里：它需要在切换时立刻重启/停止监听，
+                // 而这个 sheet 只在按「保存」时才写回，无法及时联动。
+                // 唯一入口在设置页与语音页的开关上。
             }
             .navigationTitle("qwen.voice.config".localized)
             .navigationBarTitleDisplayMode(.inline)
@@ -77,7 +74,6 @@ struct QwenGatewayConfigSheetView: View {
 
     private func save() {
         QwenRealtimeModelCatalog.setSelected(realtimeModelID)
-        QwenVoiceSession.wakeWordEnabled = wakeWordEnabled
         draft.apply(to: QwenGatewayService.shared)
         QwenVoiceSession.idleAutoEndEnabled = idleAutoEnd
         onSave()

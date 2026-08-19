@@ -1459,7 +1459,6 @@
 "agent.share.list.name" = "分享";
 "qwen.wakeword.title" = "语音唤醒词";
 "qwen.wakeword.subtitle" = "会话休眠时，说「你好千问」即可唤醒助手。";
-"qwen.wakeword.footer" = "使用设备端语音识别。语音会话休眠后，说出唤醒词即可唤醒并恢复聆听。";
 "qwen.wakeword.listening" = "正在聆听「你好千问」";
 "qwen.wakeword.sleeping" = "休眠中";
 "qwen.wakeword.wake" = "唤醒";
@@ -1734,7 +1733,6 @@
 "assistant.settings.conversation" = "对话";
 "assistant.settings.controls" = "交互";
 "assistant.settings.voice.service" = "语音服务";
-"assistant.settings.voice.model" = "语音模型";
 "assistant.settings.agent" = "Agent";
 "assistant.settings.agent.brain" = "任务 Agent";
 "assistant.settings.agent.presence" = "持续对话";

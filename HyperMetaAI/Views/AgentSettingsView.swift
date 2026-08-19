@@ -102,7 +102,6 @@ struct AgentSettingsView: View {
     // Qwen Gateway：表单由 QwenGatewayConfigurationSections 渲染，这里只持有草稿与保存反馈
     @State private var qwenDraft = QwenGatewayDraft()
     @State private var qwenSaved = false
-    @State private var visionInjectionEnabled = AgentVisionSettings.injectionEnabled
     @State private var visionFollowUpEnabled = AgentVisionSettings.followUpEnabled
     @State private var brainDefault = AgentBrainSettings.selected
     @State private var askResultNotifyEnabled = AgentAskResultSettings.enabled()
@@ -835,19 +834,14 @@ struct AgentSettingsView: View {
                 }
 
                 Section {
-                    Toggle("agent.vision.injection.toggle".localized, isOn: $visionInjectionEnabled)
-                        .onChange(of: visionInjectionEnabled) { _, newValue in
-                            AgentVisionSettings.injectionEnabled = newValue
-                        }
+                    // 视野注入总开关在设置页的「眼镜」分组里，那里离设备状态更近。
+                    // 这里只保留它的子选项：连续追问。
                     Toggle("agent.vision.followup.toggle".localized, isOn: $visionFollowUpEnabled)
                         .onChange(of: visionFollowUpEnabled) { _, newValue in
                             AgentVisionSettings.followUpEnabled = newValue
                         }
                 } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("agent.vision.injection.footer".localized)
-                        Text("agent.vision.followup.footer".localized)
-                    }
+                    Text("agent.vision.followup.footer".localized)
                 }
 
                 Section {
