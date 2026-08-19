@@ -1,4 +1,5 @@
 import Foundation
+import AVFAudio
 import XCTest
 
 @testable import HyperMetaAI
@@ -65,12 +66,73 @@ private final class MockWakeWordMonitor: QwenWakeWordListening {
   }
 }
 
+private final class VoiceSessionMockPlaybackPipeline: RealtimeAudioPlaybackControlling {
+  private(set) var enqueueCallCount = 0
+  private(set) var lastReceivedAt: TimeInterval?
+  private(set) var interruptCallCount = 0
+  private(set) var invalidateAudioSystemCallCount = 0
+  private(set) var prepareCallCount = 0
+  private(set) var stopCallCount = 0
+  var isActive = true
+
+  func start(
+    generation: Int,
+    onFailure: @escaping RealtimeAudioPlaybackPipeline.FailureHandler,
+    onResponsePlaybackComplete: @escaping RealtimeAudioPlaybackPipeline.PlaybackCompletionHandler,
+    onAudioLevel: @escaping RealtimeAudioPlaybackPipeline.AudioLevelHandler
+  ) {
+    isActive = true
+  }
+
+  func prepare(generation: Int) {
+    prepareCallCount += 1
+  }
+
+  func stop() {
+    stopCallCount += 1
+    isActive = false
+  }
+
+  func enqueue(
+    _ data: Data,
+    generation: Int,
+    receivedAt: TimeInterval
+  ) -> RealtimeAudioJitterOfferResult {
+    enqueueCallCount += 1
+    lastReceivedAt = receivedAt
+    guard isActive else { return .inactive }
+    guard !data.isEmpty, data.count.isMultiple(of: MemoryLayout<Int16>.size) else {
+      return .invalidFrameAlignment
+    }
+    return .accepted
+  }
+
+  func finishResponse(generation: Int) {}
+
+  /// Milliseconds the double reports as "already played" on interrupt, so tests
+  /// can assert the truncate value forwarded to the gateway.
+  var playedMillisecondsOnInterrupt = 0
+
+  @discardableResult
+  func interrupt(generation: Int) -> Int {
+    interruptCallCount += 1
+    return playedMillisecondsOnInterrupt
+  }
+
+  @discardableResult
+  func invalidateAudioSystem(generation: Int) -> Int {
+    invalidateAudioSystemCallCount += 1
+    return playedMillisecondsOnInterrupt
+  }
+}
+
 @MainActor
 final class QwenVoiceSessionTests: XCTestCase {
   private var mockSocket: VoiceSessionMockSocket!
   private var gateway: QwenGatewayService!
   private var session: QwenVoiceSession!
   private var permissionResponder: MockPermissionResponder!
+  private var playbackPipeline: VoiceSessionMockPlaybackPipeline!
 
   override func setUp() {
     super.setUp()
@@ -78,7 +140,12 @@ final class QwenVoiceSessionTests: XCTestCase {
     gateway = QwenGatewayService(socketFactory: { _ in self.mockSocket })
     gateway.mode = .external
     permissionResponder = MockPermissionResponder()
-    session = QwenVoiceSession(gateway: gateway, permissionResponder: permissionResponder)
+    playbackPipeline = VoiceSessionMockPlaybackPipeline()
+    session = QwenVoiceSession(
+      gateway: gateway,
+      permissionResponder: permissionResponder,
+      audioPlaybackPipeline: playbackPipeline
+    )
   }
 
   override func tearDown() {
@@ -86,10 +153,37 @@ final class QwenVoiceSessionTests: XCTestCase {
     gateway.disconnect()
     UserDefaults.standard.removeObject(forKey: AgentPermissionSettings.modeKey)
     session = nil
+    playbackPipeline = nil
     permissionResponder = nil
     gateway = nil
     mockSocket = nil
     super.tearDown()
+  }
+
+  func testProviderTurnStateDoesNotConflateCaptureWithSpeech() {
+    XCTAssertEqual(session.providerVoiceState, "idle")
+    XCTAssertFalse(session.isInputActive)
+
+    session.consume(.voiceState(state: "listening"))
+    XCTAssertEqual(session.providerVoiceState, "listening")
+    XCTAssertTrue(session.isInputActive)
+
+    session.consume(.voiceState(state: "thinking"))
+    XCTAssertEqual(session.providerVoiceState, "thinking")
+    XCTAssertFalse(session.isInputActive)
+
+    session.consume(.voiceState(state: "idle"))
+    XCTAssertEqual(session.providerVoiceState, "idle")
+    XCTAssertFalse(session.isInputActive)
+  }
+
+  func testTransportRecoveryClearsAnActiveSpeechTurn() {
+    session.consume(.voiceState(state: "listening"))
+
+    session.consume(.gatewayReconnecting(attempt: 1, maxAttempts: 5))
+
+    XCTAssertEqual(session.providerVoiceState, "idle")
+    XCTAssertFalse(session.isInputActive)
   }
 
   func testVoiceReadyUpdatesConnectionState() {
@@ -614,8 +708,8 @@ final class QwenVoiceSessionTests: XCTestCase {
       minimumDuration: 0.25,
       sampleRate: 16_000
     )
-    XCTAssertFalse(detector.consume(rms: 0.5, sampleCount: 2048), "单次 0.128s 高能量不足")
-    XCTAssertTrue(detector.consume(rms: 0.5, sampleCount: 2048), "累计 0.256s 触发")
+    XCTAssertFalse(detector.consume(rms: 0.05, sampleCount: 2048), "单次 0.128s 高能量不足")
+    XCTAssertTrue(detector.consume(rms: 0.05, sampleCount: 2048), "累计 0.256s 触发")
     XCTAssertFalse(detector.consume(rms: 0.9, sampleCount: 2048), "触发后幂等")
   }
 
@@ -625,10 +719,10 @@ final class QwenVoiceSessionTests: XCTestCase {
       minimumDuration: 0.25,
       sampleRate: 16_000
     )
-    XCTAssertFalse(detector.consume(rms: 0.5, sampleCount: 2048), "0.128s 不足")
+    XCTAssertFalse(detector.consume(rms: 0.05, sampleCount: 2048), "0.128s 不足")
     XCTAssertFalse(detector.consume(rms: 0.0, sampleCount: 2048), "间隙只衰减一半")
-    XCTAssertFalse(detector.consume(rms: 0.5, sampleCount: 2048), "0.128+0.064 仍不足")
-    XCTAssertTrue(detector.consume(rms: 0.5, sampleCount: 2048), "累计超过阈值触发")
+    XCTAssertFalse(detector.consume(rms: 0.05, sampleCount: 2048), "0.128+0.064 仍不足")
+    XCTAssertTrue(detector.consume(rms: 0.05, sampleCount: 2048), "累计超过阈值触发")
   }
 
   func testBargeInDetectorResetClearsTrigger() {
@@ -637,10 +731,141 @@ final class QwenVoiceSessionTests: XCTestCase {
       minimumDuration: 0.25,
       sampleRate: 16_000
     )
-    _ = detector.consume(rms: 0.5, sampleCount: 2048)
-    XCTAssertTrue(detector.consume(rms: 0.5, sampleCount: 2048))
+    _ = detector.consume(rms: 0.05, sampleCount: 2048)
+    XCTAssertTrue(detector.consume(rms: 0.05, sampleCount: 2048))
     detector.reset()
-    XCTAssertFalse(detector.consume(rms: 0.5, sampleCount: 2048), "reset 后重新累计")
+    XCTAssertFalse(detector.consume(rms: 0.05, sampleCount: 2048), "reset 后重新累计")
+  }
+
+  func testBargeInDetectorHighConfidenceSpeechTriggersWithinFortyMilliseconds() {
+    var detector = BargeInDetector()
+    XCTAssertFalse(detector.consume(rms: 0.15, sampleCount: 320), "20ms 不应由单帧触发")
+    let triggered = detector.consume(rms: 0.15, sampleCount: 320)
+
+    let attachment = XCTAttachment(
+      string: "fastBargeInAudioMs=\(triggered ? "40.0" : "not_triggered")"
+    )
+    attachment.name = "Qwen high-confidence barge-in audio latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertTrue(triggered, "高置信近讲语音应在连续 40ms 内触发")
+  }
+
+  func testCaptureBargeInGateUsesRawCaptureDurationBeforeNetworkDelivery() {
+    let gate = QwenCaptureBargeInGate()
+    let token = gate.arm()
+    let twentyMilliseconds = RealtimeCapturedAudioFrameStats(
+      rms: 0.15,
+      sampleCount: 960,
+      sampleRate: 48_000
+    )
+
+    XCTAssertNil(gate.consume(twentyMilliseconds))
+    XCTAssertEqual(gate.consume(twentyMilliseconds), token)
+    XCTAssertNil(gate.consume(twentyMilliseconds), "每次 arm 只触发一次")
+  }
+
+  func testCaptureBargeInGateRejectsStaleAndDisarmedSignals() {
+    let gate = QwenCaptureBargeInGate()
+    let twentyMilliseconds = RealtimeCapturedAudioFrameStats(
+      rms: 0.15,
+      sampleCount: 320,
+      sampleRate: 16_000
+    )
+
+    let staleToken = gate.arm()
+    XCTAssertNil(gate.consume(twentyMilliseconds))
+    gate.disarm()
+    XCTAssertNil(gate.consume(twentyMilliseconds))
+
+    let currentToken = gate.arm()
+    XCTAssertNotEqual(staleToken, currentToken)
+    XCTAssertNil(gate.consume(twentyMilliseconds))
+    XCTAssertEqual(gate.consume(twentyMilliseconds), currentToken)
+  }
+
+  func testBargeInDetectorLoudTransientDoesNotCarryAcrossModerateSpeech() {
+    var detector = BargeInDetector()
+    XCTAssertFalse(detector.consume(rms: 0.15, sampleCount: 320), "单个 20ms 高能量瞬态不足")
+    XCTAssertFalse(detector.consume(rms: 0.05, sampleCount: 320), "普通语音帧应清除快速路径累计")
+    XCTAssertFalse(detector.consume(rms: 0.15, sampleCount: 320), "新的高能量帧应从 20ms 重新累计")
+  }
+
+  func testBargeInDetectorModerateSpeechKeepsStandardWindow() {
+    var detector = BargeInDetector()
+    for _ in 0..<5 {
+      XCTAssertFalse(detector.consume(rms: 0.05, sampleCount: 320))
+    }
+    XCTAssertTrue(detector.consume(rms: 0.05, sampleCount: 320), "普通语音仍需累计 120ms")
+  }
+
+  func testBargeInDetectorZeroDurationStillRequiresCurrentEnergy() {
+    var detector = BargeInDetector(minimumDuration: 0)
+    XCTAssertFalse(detector.consume(rms: 0, sampleCount: 320))
+    XCTAssertTrue(detector.consume(rms: 0.02, sampleCount: 320))
+  }
+
+  func testCancelledResponseRegistryEvictsOldestIdentifier() {
+    var registry = QwenCancelledResponseRegistry(capacity: 2)
+    registry.insert("r1")
+    registry.insert("r2")
+    registry.insert("r3")
+
+    XCTAssertFalse(registry.contains("r1"))
+    XCTAssertTrue(registry.contains("r2"))
+    XCTAssertTrue(registry.contains("r3"))
+  }
+
+  func testResponseOutputGateBlocksUncorrelatedAudioAfterCancellation() {
+    var gate = QwenResponseOutputGate()
+    gate.markCancelled()
+
+    XCTAssertFalse(gate.acceptAudio(hasResponseID: false))
+    XCTAssertTrue(gate.acceptAudio(hasResponseID: true))
+    XCTAssertTrue(gate.acceptsTerminal(hasResponseID: false))
+  }
+
+  func testAudioBurstConsumptionKeepsMainActorWithinPerPacketBudget() {
+    let packetCount = 10_000
+    let packet = Data(repeating: 7, count: 1_920).base64EncodedString()
+    let events = (0..<packetCount).map { _ in
+      QwenGatewayEvent.audioDelta(
+        audioBase64: packet,
+        sampleRate: 24_000,
+        responseId: "burst"
+      )
+    }
+    session.consume(.responseStarted(responseId: "burst"))
+
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    for event in events {
+      session.consume(event)
+    }
+    let averageMicroseconds = (
+      ProcessInfo.processInfo.systemUptime - startedAt
+    ) * 1_000_000 / Double(packetCount)
+    let attachment = XCTAttachment(
+      string: "mainActorAudioConsumeAverageUs=\(averageMicroseconds)"
+    )
+    attachment.name = "Qwen MainActor audio burst consumption latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertEqual(playbackPipeline.enqueueCallCount, packetCount)
+    XCTAssertLessThan(averageMicroseconds, 2)
+  }
+
+  func testAudioChunkPreservesGatewayReceiveTimeIntoPlaybackPipeline() {
+    let receivedAt = 42.5
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r1",
+      receivedAt: receivedAt
+    ))
+
+    XCTAssertEqual(playbackPipeline.lastReceivedAt, receivedAt)
   }
 
   func testBargeInStopsPlaybackWithoutMutingInput() async {
@@ -664,6 +889,545 @@ final class QwenVoiceSessionTests: XCTestCase {
     XCTAssertFalse(types.contains("input.mute"), "barge-in 不应静音输入，网关需继续听")
   }
 
+  func testBargeInDropsLateCancelledResponseEventsWithoutStoppingNextResponse() {
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertTrue(session.isSpeaking)
+
+    session.bargeIn()
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertFalse(session.isSpeaking, "已取消响应的迟到音频不应恢复播放")
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r2"))
+    XCTAssertTrue(session.isSpeaking, "新响应应正常播放")
+
+    session.consume(.audioDone(responseId: "r1"))
+    session.consume(.responseInterrupted(responseId: "r1"))
+    XCTAssertTrue(session.isSpeaking, "旧响应终态不应结束新响应")
+
+    session.consume(.responseInterrupted(responseId: "r2"))
+    XCTAssertFalse(session.isSpeaking)
+  }
+
+  func testResponseStartedSupersedesTheActiveResponseBeforeItsFirstAudio() {
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertTrue(session.isSpeaking)
+
+    session.consume(.responseStarted(responseId: "r2"))
+    XCTAssertFalse(session.isSpeaking)
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertFalse(session.isSpeaking, "被 supersede 的 response 不应重新开始播放")
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r2"))
+    XCTAssertTrue(session.isSpeaking)
+  }
+
+  func testUncorrelatedLateAudioStaysBlockedUntilNextResponseStarts() {
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: nil))
+    XCTAssertTrue(session.isSpeaking)
+
+    session.bargeIn()
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: nil))
+    XCTAssertFalse(session.isSpeaking, "取消后的无 responseId 音频不应复活旧播报")
+
+    session.consume(.responseStarted(responseId: nil))
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: nil))
+    XCTAssertTrue(session.isSpeaking, "明确的新 response 生命周期允许无 ID 音频")
+  }
+
+  func testGatewayDisconnectStopsPlaybackAndBlocksLateAudio() {
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertTrue(session.isSpeaking)
+
+    session.consume(.gatewayDisconnected)
+    XCTAssertFalse(session.isSpeaking)
+    XCTAssertEqual(playbackPipeline.interruptCallCount, 1)
+    XCTAssertEqual(playbackPipeline.stopCallCount, 0)
+    XCTAssertTrue(playbackPipeline.isActive)
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r2"))
+    XCTAssertFalse(session.isSpeaking, "传输丢失后的任何排队音频都必须等待新 response 生命周期")
+
+    session.consume(.responseStarted(responseId: "r2"))
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r2"))
+    XCTAssertTrue(session.isSpeaking)
+    XCTAssertEqual(playbackPipeline.enqueueCallCount, 2)
+  }
+
+  func testVoiceFrontendUnavailableCancelsActivePlaybackAsPlaybackError() async {
+    gateway.onEvent = { [weak session] event in
+      session?.consume(event)
+    }
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r1"
+    ))
+    XCTAssertTrue(session.isSpeaking)
+
+    mockSocket.deliver([
+      "type": "voice.connection",
+      "state": "unavailable",
+      "message": "provider unavailable"
+    ])
+    await waitUntil {
+      if case .failed = self.session.connectionState { return true }
+      return false
+    }
+
+    XCTAssertFalse(session.isSpeaking)
+    XCTAssertEqual(playbackCancelledMessages().last?["responseId"] as? String, "r1")
+    XCTAssertEqual(playbackCancelledMessages().last?["reason"] as? String, "playback_error")
+  }
+
+  func testAudioInterruptionBeganCancelsActivePlaybackAsPlaybackError() {
+    gateway.connect()
+    let captureGenerationBeforeInterruption = session.captureGeneration
+    session.consume(.responseStarted(responseId: "r1"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r1"
+    ))
+    XCTAssertTrue(session.isSpeaking)
+
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    session.handleAudioInterruption(Notification(
+      name: AVAudioSession.interruptionNotification,
+      object: AVAudioSession.sharedInstance(),
+      userInfo: [
+        AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue
+      ]
+    ))
+    let elapsedMilliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+    let cancelled = !session.isSpeaking
+
+    let attachment = XCTAttachment(
+      string: "audioInterruptionCancelMs=\(cancelled ? String(elapsedMilliseconds) : "not_cancelled")"
+    )
+    attachment.name = "Qwen audio interruption cancellation latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertTrue(cancelled, "系统音频中断必须立即清除活动播放")
+    XCTAssertEqual(
+      session.captureGeneration,
+      captureGenerationBeforeInterruption + 1,
+      "系统中断必须同步停掉旧 VPIO 采集图"
+    )
+    XCTAssertEqual(playbackPipeline.invalidateAudioSystemCallCount, 1)
+    XCTAssertEqual(playbackCancelledMessages().last?["responseId"] as? String, "r1")
+    XCTAssertEqual(playbackCancelledMessages().last?["reason"] as? String, "playback_error")
+    if cancelled {
+      XCTAssertLessThan(elapsedMilliseconds, 50)
+    }
+
+    session.consume(.responseStarted(responseId: "r2"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r2"
+    ))
+    XCTAssertTrue(session.isSpeaking, "恢复后的下一响应不应要求重连 Qwen 会话")
+    XCTAssertEqual(playbackPipeline.enqueueCallCount, 2)
+  }
+
+  func testMediaServicesResetCancelsPlaybackAndKeepsSessionReusable() {
+    gateway.connect()
+    session.consume(.responseStarted(responseId: "r1"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r1"
+    ))
+
+    session.handleMediaServicesReset()
+
+    XCTAssertFalse(session.isSpeaking)
+    XCTAssertEqual(playbackPipeline.invalidateAudioSystemCallCount, 1)
+    XCTAssertEqual(playbackCancelledMessages().last?["responseId"] as? String, "r1")
+    XCTAssertEqual(playbackCancelledMessages().last?["reason"] as? String, "playback_error")
+
+    session.consume(.responseStarted(responseId: "r2"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r2"
+    ))
+    XCTAssertTrue(session.isSpeaking)
+  }
+
+  func testAudioRouteRecoveryPolicySeparatesPhysicalFromSelfInitiatedChanges() {
+    XCTAssertTrue(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .newDeviceAvailable))
+    XCTAssertTrue(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .oldDeviceUnavailable))
+    XCTAssertTrue(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .wakeFromSleep))
+    XCTAssertTrue(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .noSuitableRouteForCategory))
+    XCTAssertTrue(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .routeConfigurationChange))
+
+    XCTAssertFalse(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .unknown))
+    XCTAssertFalse(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .categoryChange))
+    XCTAssertFalse(QwenAudioRouteRecoveryPolicy.requiresRecovery(for: .override))
+  }
+
+  func testAudioRouteSettleWindowIsCoveredByRecoverySuppression() {
+    XCTAssertEqual(QwenVoiceSession.audioRouteSettleNanoseconds, 750_000_000)
+    XCTAssertGreaterThan(
+      QwenVoiceSession.audioRouteConfigurationSuppressionInterval,
+      Double(QwenVoiceSession.audioRouteSettleNanoseconds) / 1_000_000_000
+    )
+  }
+
+  func testAudioEngineConfigurationChangeQuiescesCaptureBeforeRecovery() {
+    let initialGeneration = session.captureGeneration
+    session.consume(.voiceState(state: "listening"))
+
+    session.handleAudioEngineConfigurationChange()
+
+    XCTAssertEqual(session.captureGeneration, initialGeneration + 1)
+    XCTAssertEqual(session.providerVoiceState, "idle")
+    XCTAssertFalse(session.isInputActive)
+    XCTAssertEqual(playbackPipeline.invalidateAudioSystemCallCount, 1)
+  }
+
+  func testAudioRouteRecoveryCoalescerRunsOneSettledRecoveryPerBurst() async {
+    let settled = expectation(description: "settled route recovery")
+    let coalescer = QwenAudioRouteRecoveryCoalescer(delayNanoseconds: 10_000_000)
+    var immediateCount = 0
+    var settledCount = 0
+
+    coalescer.schedule(
+      onFirst: { immediateCount += 1 },
+      onSettled: {
+        settledCount += 1
+        settled.fulfill()
+      }
+    )
+    coalescer.schedule(
+      onFirst: { immediateCount += 1 },
+      onSettled: {
+        settledCount += 1
+        settled.fulfill()
+      }
+    )
+
+    XCTAssertEqual(immediateCount, 1)
+    await fulfillment(of: [settled], timeout: 0.5)
+    XCTAssertEqual(settledCount, 1)
+
+    coalescer.schedule(
+      onFirst: { immediateCount += 1 },
+      onSettled: { settledCount += 1 }
+    )
+    coalescer.cancel()
+    try? await Task.sleep(nanoseconds: 30_000_000)
+    XCTAssertEqual(immediateCount, 2)
+    XCTAssertEqual(settledCount, 1, "系统中断取消后不得执行迟到的路由恢复")
+  }
+
+  func testAudioCaptureRecoveryPolicyUsesBoundedLowLatencyBackoff() {
+    let policy = QwenAudioCaptureRecoveryPolicy()
+
+    XCTAssertEqual(policy.delay(forRetry: 1), 0.1)
+    XCTAssertEqual(policy.delay(forRetry: 2), 0.25)
+    XCTAssertEqual(policy.delay(forRetry: 3), 0.5)
+    XCTAssertNil(policy.delay(forRetry: 0))
+    XCTAssertNil(policy.delay(forRetry: 4))
+  }
+
+  func testAudioCaptureRecoverySchedulerAdvancesAndResetCancelsStaleWork() async {
+    let scheduler = QwenAudioCaptureRecoveryScheduler(
+      policy: QwenAudioCaptureRecoveryPolicy(retryDelays: [0.01, 0.015])
+    )
+    let firstRetry = expectation(description: "first capture retry")
+    let secondRetry = expectation(description: "second capture retry")
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    var firstRetryMilliseconds = 0.0
+    var firedCount = 0
+
+    XCTAssertTrue(scheduler.schedule {
+      firstRetryMilliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+      firedCount += 1
+      firstRetry.fulfill()
+    })
+    await fulfillment(of: [firstRetry], timeout: 0.5)
+
+    XCTAssertTrue(scheduler.schedule {
+      firedCount += 1
+      secondRetry.fulfill()
+    })
+    await fulfillment(of: [secondRetry], timeout: 0.5)
+    XCTAssertFalse(scheduler.schedule { XCTFail("exhausted retry must not run") })
+
+    let attachment = XCTAttachment(
+      string: "captureRecoveryFirstRetryMs=\(firstRetryMilliseconds)"
+    )
+    attachment.name = "Qwen audio capture recovery retry latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertEqual(firedCount, 2)
+    XCTAssertLessThan(firstRetryMilliseconds, 50)
+
+    scheduler.reset()
+    XCTAssertTrue(scheduler.schedule { firedCount += 1 })
+    scheduler.reset()
+    try? await Task.sleep(nanoseconds: 30_000_000)
+    XCTAssertEqual(firedCount, 2, "reset 后迟到的采集恢复任务不得执行")
+  }
+
+  func testPhysicalAudioRouteChangeCancelsPlaybackCoalescesBurstAndKeepsSessionReusable() {
+    gateway.connect()
+    let captureGenerationBeforeRouteChange = session.captureGeneration
+    session.consume(.responseStarted(responseId: "r1"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r1"
+    ))
+    XCTAssertTrue(session.isSpeaking)
+
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    session.handleAudioRouteChange(routeChangeNotification(reason: .oldDeviceUnavailable))
+    XCTAssertEqual(session.captureGeneration, captureGenerationBeforeRouteChange + 1)
+    let elapsedMilliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+    session.handleAudioRouteChange(routeChangeNotification(reason: .newDeviceAvailable))
+    XCTAssertEqual(
+      session.captureGeneration,
+      captureGenerationBeforeRouteChange + 1,
+      "同一路由突发只应拆除一次旧采集图"
+    )
+    let cancelled = !session.isSpeaking
+
+    let attachment = XCTAttachment(
+      string: "audioRouteChangeCancelMs=\(cancelled ? String(elapsedMilliseconds) : "not_cancelled")"
+    )
+    attachment.name = "Qwen physical audio route cancellation latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertTrue(cancelled, "物理音频路由变化必须立即清除旧路由上的播放")
+    XCTAssertEqual(
+      playbackPipeline.invalidateAudioSystemCallCount,
+      1,
+      "同一短突发只应同步失效一次播放图"
+    )
+    XCTAssertEqual(playbackCancelledMessages().last?["responseId"] as? String, "r1")
+    XCTAssertEqual(playbackCancelledMessages().last?["reason"] as? String, "playback_error")
+    if cancelled {
+      XCTAssertLessThan(elapsedMilliseconds, 50)
+    }
+
+    session.consume(.responseStarted(responseId: "r2"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r2"
+    ))
+    XCTAssertTrue(session.isSpeaking, "路由恢复后的下一响应不应要求重连 Qwen 会话")
+    XCTAssertEqual(playbackPipeline.enqueueCallCount, 2)
+  }
+
+  func testSelfInitiatedAudioRouteChangeDoesNotInvalidatePlayback() {
+    session.consume(.responseStarted(responseId: "r1"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "r1"
+    ))
+
+    session.handleAudioRouteChange(routeChangeNotification(reason: .categoryChange))
+    session.handleAudioRouteChange(routeChangeNotification(reason: .override))
+
+    XCTAssertTrue(session.isSpeaking)
+    XCTAssertEqual(playbackPipeline.invalidateAudioSystemCallCount, 0)
+  }
+
+  func testRejectedAudioDoesNotClaimPlaybackStarted() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+
+    session.consume(.audioDelta(audioBase64: "AQ==", sampleRate: 24_000, responseId: "r1"))
+
+    XCTAssertFalse(session.isSpeaking)
+    XCTAssertEqual(playbackPipeline.enqueueCallCount, 1)
+    let playbackStarted = mockSocket.sentMessages.contains { message in
+      guard let data = message.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { return false }
+      return json["type"] as? String == "playback.started"
+    }
+    XCTAssertFalse(playbackStarted)
+  }
+
+  func testResponseStartedSendsPlaybackReceiptOnlyAfterAcceptedAudio() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+
+    session.consume(.responseStarted(responseId: "r1"))
+    session.consume(.audioDelta(audioBase64: "AQ==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertTrue(playbackStartedMessages().isEmpty)
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+
+    let messages = playbackStartedMessages()
+    XCTAssertEqual(messages.count, 1)
+    XCTAssertEqual(messages.first?["responseId"] as? String, "r1")
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    XCTAssertEqual(playbackStartedMessages().count, 1)
+
+    session.consume(.responseStarted(responseId: "r2"))
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r2"))
+    XCTAssertEqual(
+      playbackStartedMessages().compactMap { $0["responseId"] as? String },
+      ["r1", "r2"]
+    )
+  }
+
+  func testManualInterruptDropsAllAudioUntilResume() {
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    session.interrupt()
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r2"))
+    XCTAssertFalse(session.isSpeaking)
+
+    session.resume()
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r3"))
+    XCTAssertTrue(session.isSpeaking)
+  }
+
+  func testManualInterruptReportsUserInterruptionReason() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    session.interrupt()
+
+    let cancellation = playbackCancelledMessages().last
+    XCTAssertEqual(cancellation?["responseId"] as? String, "r1")
+    XCTAssertEqual(cancellation?["reason"] as? String, "user_interruption")
+    let wireTypes = mockSocket.sentMessages.compactMap { message -> String? in
+      guard let data = message.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { return nil }
+      return json["type"] as? String
+    }
+    let cancelledIndex = try? XCTUnwrap(wireTypes.lastIndex(of: "playback.cancelled"))
+    let interruptIndex = try? XCTUnwrap(wireTypes.lastIndex(of: "interrupt"))
+    if let cancelledIndex, let interruptIndex {
+      XCTAssertLessThan(cancelledIndex, interruptIndex)
+    }
+  }
+
+  func testPlaybackClearForwardsCancellationReason() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+    session.consume(.playbackClear(reason: "desktop_hidden"))
+
+    let cancellation = playbackCancelledMessages().last
+    XCTAssertEqual(cancellation?["responseId"] as? String, "r1")
+    XCTAssertEqual(cancellation?["reason"] as? String, "desktop_hidden")
+  }
+
+  private func playbackStartedMessages() -> [[String: Any]] {
+    mockSocket.sentMessages.compactMap { message in
+      guard let data = message.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            json["type"] as? String == "playback.started"
+      else { return nil }
+      return json
+    }
+  }
+
+  func testBargeInForwardsActuallyPlayedMillisecondsSoServerCanTruncate() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+    playbackPipeline.playedMillisecondsOnInterrupt = 820
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+
+    session.bargeIn()
+
+    XCTAssertEqual(interruptMessages().last?["playedMs"] as? Int, 820)
+  }
+
+  func testBargeInDuringThinkingCancelsTheResponseBeingGenerated() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+    // thinking：服务端已收到用户上一句、正在生成，但首个音频块还没到。
+    session.consume(.voiceState(state: "thinking"))
+    XCTAssertFalse(session.isSpeaking)
+
+    session.bargeIn()
+
+    XCTAssertEqual(interruptMessages().count, 1, "thinking 阶段也必须能打断")
+    XCTAssertEqual(playbackPipeline.interruptCallCount, 1)
+  }
+
+  func testProviderTurnStartDuringThinkingAlsoCancelsTheResponse() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+    session.consume(.voiceState(state: "thinking"))
+
+    session.consume(.turnStarted(turnId: "user-turn"))
+
+    XCTAssertEqual(interruptMessages().count, 1)
+  }
+
+  func testServerInitiatedCancellationDoesNotEchoAnInterruptBack() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+
+    session.consume(.responseInterrupted(responseId: "r1"))
+
+    XCTAssertFalse(session.isSpeaking)
+    XCTAssertTrue(
+      interruptMessages().isEmpty,
+      "服务端自己取消的回复，客户端不应再回发 interrupt/truncate"
+    )
+  }
+
+  private func interruptMessages() -> [[String: Any]] {
+    mockSocket.sentMessages.compactMap { message in
+      guard let data = message.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            json["type"] as? String == "interrupt"
+      else { return nil }
+      return json
+    }
+  }
+
+  private func playbackCancelledMessages() -> [[String: Any]] {
+    mockSocket.sentMessages.compactMap { message in
+      guard let data = message.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            json["type"] as? String == "playback.cancelled"
+      else { return nil }
+      return json
+    }
+  }
+
+  private func routeChangeNotification(
+    reason: AVAudioSession.RouteChangeReason
+  ) -> Notification {
+    Notification(
+      name: AVAudioSession.routeChangeNotification,
+      object: AVAudioSession.sharedInstance(),
+      userInfo: [AVAudioSessionRouteChangeReasonKey: reason.rawValue]
+    )
+  }
+
   func testBargeInWithoutSpeakingIsNoOp() {
     session.bargeIn()
     XCTAssertFalse(session.isSpeaking)
@@ -674,6 +1438,28 @@ final class QwenVoiceSessionTests: XCTestCase {
       return json["type"] as? String
     }
     XCTAssertFalse(types.contains("interrupt"))
+  }
+
+  func testProviderVADAlsoInterruptsActivePlayback() async {
+    gateway.connect()
+    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
+    await waitUntil { self.gateway.connectionState == .connected }
+    session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
+
+    session.consume(.turnStarted(turnId: "user-turn"))
+
+    XCTAssertFalse(session.isSpeaking)
+    let types = mockSocket.sentMessages.compactMap { message -> String? in
+      guard let data = message.data(using: .utf8),
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+      else { return nil }
+      return json["type"] as? String
+    }
+    XCTAssertTrue(types.contains("interrupt"))
+    XCTAssertEqual(
+      playbackCancelledMessages().last?["reason"] as? String,
+      "user_interruption"
+    )
   }
 
   func testRmsEnergyComputesNormalizedValue() {
@@ -716,6 +1502,26 @@ final class QwenVoiceSessionTests: XCTestCase {
     session.consume(.gatewayReconnecting(attempt: 1, maxAttempts: 5))
     session.consume(.gatewayDisconnected)
     XCTAssertNil(session.reconnectAttempt)
+  }
+
+  func testProviderReconnectLifecycleClearsFailureAndGatewayAttempt() {
+    session.consume(.gatewayReconnecting(attempt: 2, maxAttempts: 5))
+    session.consume(.voiceConnection(
+      state: "unavailable",
+      message: "provider temporarily unavailable"
+    ))
+    guard case .failed(let message) = session.connectionState else {
+      return XCTFail("Provider unavailability must be surfaced")
+    }
+    XCTAssertEqual(message, "provider temporarily unavailable")
+
+    session.consume(.voiceConnection(state: "connecting", message: nil))
+    XCTAssertEqual(session.connectionState, .connecting)
+
+    session.consume(.voiceConnection(state: "connected", message: nil))
+    XCTAssertEqual(session.connectionState, .connected)
+    XCTAssertNil(session.reconnectAttempt)
+    XCTAssertNil(session.errorMessage)
   }
 
   // MARK: - Idle Timeout
@@ -791,7 +1597,7 @@ final class QwenVoiceSessionTests: XCTestCase {
     session.consume(.audioDelta(audioBase64: "AQIDBA==", sampleRate: 24_000, responseId: "r1"))
     XCTAssertTrue(session.isSpeaking)
 
-    session.consume(.responseInterrupted)
+    session.consume(.responseInterrupted(responseId: "r1"))
     XCTAssertFalse(session.isSpeaking)
   }
 
@@ -812,6 +1618,25 @@ final class QwenVoiceSessionTests: XCTestCase {
     session.consume(.transcriptFinal(role: "assistant", text: "好的"))
     XCTAssertEqual(session.transcriptLog.count, 2)
     XCTAssertEqual(session.transcriptLog[1].role, .assistant)
+  }
+
+  func testVisualTranscriptRequestsOneOnDemandFrame() {
+    var receivedIntent: AgentVisionIntent?
+    session.onVisionRequest = { receivedIntent = $0 }
+
+    session.consume(.transcriptFinal(role: "user", text: "我眼前是什么"))
+
+    XCTAssertEqual(receivedIntent?.kind, .scene)
+    XCTAssertEqual(receivedIntent?.prompt, "我眼前是什么")
+  }
+
+  func testOrdinaryTranscriptDoesNotRequestCamera() {
+    var requestCount = 0
+    session.onVisionRequest = { _ in requestCount += 1 }
+
+    session.consume(.transcriptFinal(role: "user", text: "今天天气怎么样"))
+
+    XCTAssertEqual(requestCount, 0)
   }
 
   func testEmptyTranscriptIsNotLogged() {
@@ -1721,14 +2546,10 @@ final class QwenVoiceSessionTests: XCTestCase {
   }
   // MARK: - 休眠 / 唤醒词
 
-  /// 启动会话并送达 voice.ready，使网关进入 online（send 才允许出站消息）
-  private func startConnectedSession() async {
+  /// 启动 socket 并同步标记会话 ready；控制帧只要求底层 socket 存活。
+  private func startConnectedSession() {
     session.start()
-    mockSocket.deliver(["type": "voice.ready", "inputSampleRate": 16_000])
-    for _ in 0..<10 {
-      if session.connectionState == .connected { break }
-      await Task.yield()
-    }
+    session.consume(.voiceReady(inputSampleRate: 16_000))
     XCTAssertEqual(session.connectionState, .connected)
   }
 
@@ -1737,6 +2558,119 @@ final class QwenVoiceSessionTests: XCTestCase {
     session.consume(.clientState(state: "sleeping"))
     XCTAssertTrue(session.isSleeping)
     XCTAssertEqual(session.wakeWordPhase, .sleeping)
+  }
+
+  func testVoiceSleepCapabilityDoesNotBecomeConnectionFailure() {
+    session.consume(.voiceReady(inputSampleRate: 16_000))
+
+    session.consume(.voiceSleep(state: "enabled"))
+
+    XCTAssertEqual(session.connectionState, .connected)
+    XCTAssertFalse(session.isSleeping)
+    XCTAssertNil(AgentTurnErrorClassifier.classify(
+      connectionState: session.connectionState
+    ))
+  }
+
+  func testSleepTransitionStopsActivePlaybackWithinBudget() {
+    QwenVoiceSession.wakeWordEnabled = false
+    startConnectedSession()
+    session.consume(.responseStarted(responseId: "sleep-response"))
+    session.consume(.audioDelta(
+      audioBase64: "AQIDBA==",
+      sampleRate: 24_000,
+      responseId: "sleep-response"
+    ))
+    XCTAssertTrue(session.isSpeaking)
+    let interruptsBeforeSleep = playbackPipeline.interruptCallCount
+    let startedAt = ProcessInfo.processInfo.systemUptime
+
+    session.consume(.voiceSleep(state: "sleeping"))
+
+    let elapsedMilliseconds = (
+      ProcessInfo.processInfo.systemUptime - startedAt
+    ) * 1_000
+    print("[QwenSleepLatency] sleepTransitionAudioStopMs=\(elapsedMilliseconds)")
+    let latencyAttachment = XCTAttachment(
+      string: "sleepTransitionAudioStopMs=\(elapsedMilliseconds)"
+    )
+    latencyAttachment.name = "Qwen sleep audio stop latency"
+    latencyAttachment.lifetime = .keepAlways
+    add(latencyAttachment)
+    XCTAssertLessThan(elapsedMilliseconds, 10)
+    XCTAssertTrue(session.isSleeping)
+    XCTAssertFalse(session.isSpeaking)
+    XCTAssertEqual(String(describing: session.connectionState), "sleeping")
+    XCTAssertEqual(playbackPipeline.interruptCallCount, interruptsBeforeSleep + 1)
+  }
+
+  func testWakeLifecycleKeepsWakingPriorityUntilProviderConnects() {
+    QwenVoiceSession.wakeWordEnabled = false
+    startConnectedSession()
+    session.consume(.clientState(state: "sleeping"))
+    XCTAssertEqual(String(describing: session.connectionState), "sleeping")
+
+    session.wake()
+    XCTAssertFalse(session.isSleeping)
+    XCTAssertEqual(String(describing: session.connectionState), "waking")
+    let interruptsBeforeStaleSleep = playbackPipeline.interruptCallCount
+
+    session.consume(.clientState(state: "sleeping"))
+    session.consume(.voiceConnection(state: "sleeping", message: nil))
+    session.consume(.voiceSleep(state: "sleeping"))
+    session.consume(.clientState(state: "awake"))
+    session.consume(.voiceSleep(state: "awake"))
+    XCTAssertFalse(session.isSleeping)
+    XCTAssertEqual(String(describing: session.connectionState), "waking")
+    XCTAssertEqual(playbackPipeline.interruptCallCount, interruptsBeforeStaleSleep)
+
+    session.consume(.voiceConnection(state: "connecting", message: nil))
+    XCTAssertEqual(String(describing: session.connectionState), "waking")
+
+    session.consume(.voiceConnection(state: "connected", message: nil))
+    XCTAssertEqual(session.connectionState, .connected)
+
+    session.consume(.voiceConnection(state: "sleeping", message: nil))
+    session.wake()
+    session.consume(.voiceConnection(
+      state: "sleeping",
+      message: "wake provider unavailable"
+    ))
+    XCTAssertTrue(session.isSleeping)
+    XCTAssertEqual(String(describing: session.connectionState), "sleeping")
+  }
+
+  func testRealtimeLifecycleKeepsUpstreamStatusPrecedenceAcrossLateEvents() {
+    startConnectedSession()
+
+    session.consume(.voiceConnection(
+      state: "unavailable",
+      message: "credential missing"
+    ))
+    session.consume(.voiceSleep(state: "detected"))
+    session.consume(.clientState(state: "sleeping"))
+    session.consume(.voiceReady(inputSampleRate: 16_000))
+    guard case .failed(let message) = session.connectionState else {
+      return XCTFail("unavailable must outrank waking, sleeping, and ready")
+    }
+    XCTAssertEqual(message, "credential missing")
+
+    session.consume(.voiceConnection(state: "connecting", message: nil))
+    XCTAssertEqual(String(describing: session.connectionState), "waking")
+    session.consume(.voiceConnection(state: "connected", message: nil))
+    XCTAssertEqual(session.connectionState, .connected)
+
+    session.consume(.voiceConnection(state: "sleeping", message: nil))
+    session.consume(.voiceReady(inputSampleRate: 16_000))
+    session.consume(.voiceConnection(state: "connecting", message: nil))
+    XCTAssertEqual(session.connectionState, .sleeping)
+
+    session.consume(.voiceConnection(state: "sleeping", message: nil))
+    session.wake()
+    session.consume(.voiceReady(inputSampleRate: 16_000))
+    XCTAssertEqual(String(describing: session.connectionState), "waking")
+    session.consume(.voiceConnection(state: "connected", message: nil))
+    XCTAssertEqual(session.connectionState, .connected)
   }
 
   func testClientStateOtherDoesNotSleep() {
@@ -1758,7 +2692,7 @@ final class QwenVoiceSessionTests: XCTestCase {
   }
 
   func testRequestSleepSendsSleepEvent() async {
-    await startConnectedSession()
+    startConnectedSession()
     session.requestSleep()
     let types = mockSocket.sentMessages.compactMap { text -> String? in
       guard let data = text.data(using: .utf8),
@@ -1771,7 +2705,7 @@ final class QwenVoiceSessionTests: XCTestCase {
   }
 
   func testWakeFromSleepSendsWakeEventAndResumes() async {
-    await startConnectedSession()
+    startConnectedSession()
     session.consume(.clientState(state: "sleeping"))
     XCTAssertTrue(session.isSleeping)
     session.wake()
@@ -1789,7 +2723,7 @@ final class QwenVoiceSessionTests: XCTestCase {
       permissionResponder: permissionResponder,
       wakeWordMonitorFactory: { monitor }
     )
-    await startConnectedSession()
+    startConnectedSession()
     session.consume(.clientState(state: "sleeping"))
     XCTAssertEqual(session.wakeWordPhase, .listening)
 

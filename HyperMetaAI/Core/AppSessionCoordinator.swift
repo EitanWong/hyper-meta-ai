@@ -6,6 +6,21 @@
 import Combine
 import Foundation
 
+/// Controls whether the persisted OpenClaw node setting should create a
+/// connection during app startup. A phone-only Qwen session must not inherit a
+/// stale node connection preference from a glasses session.
+enum AgentBackgroundConnectionPolicy {
+  static func shouldAutoConnectOpenClaw(
+    isEnabled: Bool,
+    connectionState: OpenClawConnectionState,
+    hasActiveDevice: Bool,
+    selectedBrain: AgentBrain
+  ) -> Bool {
+    guard isEnabled, connectionState == .disconnected else { return false }
+    return hasActiveDevice || selectedBrain == .openclaw
+  }
+}
+
 @MainActor
 final class AppSessionCoordinator: ObservableObject {
   private let quickVisionManager: QuickVisionManager
@@ -35,7 +50,7 @@ final class AppSessionCoordinator: ObservableObject {
     let streamViewModelID = ObjectIdentifier(streamViewModel)
 
     guard configuredStreamViewModelID != streamViewModelID else {
-      reconnectOpenClawIfNeeded()
+      reconnectOpenClawIfNeeded(for: streamViewModel)
       return
     }
 
@@ -47,18 +62,24 @@ final class AppSessionCoordinator: ObservableObject {
         nodeId: openClawService.nodeIdentifier
       )
     )
-    streamViewModel.onDeviceAvailable = { [weak self] in
-      Task { @MainActor in
+    streamViewModel.onDeviceAvailable = { [weak self, weak streamViewModel] in
+      Task { @MainActor [weak self, weak streamViewModel] in
+        guard let self, let streamViewModel else { return }
+        self.reconnectOpenClawIfNeeded(for: streamViewModel)
         await AgentConnectGreetingAnnouncer.shared.handleDeviceConnected()
       }
     }
     configuredStreamViewModelID = streamViewModelID
-    reconnectOpenClawIfNeeded()
+    reconnectOpenClawIfNeeded(for: streamViewModel)
   }
 
-  private func reconnectOpenClawIfNeeded() {
-    guard openClawService.isEnabled,
-          openClawService.connectionState == .disconnected else {
+  private func reconnectOpenClawIfNeeded(for streamViewModel: StreamSessionViewModel) {
+    guard AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: openClawService.isEnabled,
+      connectionState: openClawService.connectionState,
+      hasActiveDevice: streamViewModel.hasActiveDevice,
+      selectedBrain: AgentBrainSettings.selected
+    ) else {
       return
     }
 

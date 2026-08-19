@@ -2,7 +2,7 @@
  * Qwen Gateway Models
  * qwen-audio-agent 网关 WebSocket 协议的事件模型与解析。
  * 协议参考 shared/realtime-events.mjs：
- *   客户端事件: connect / audio.append / text.message / input.mute / input.unmute / interrupt / playback.*
+ *   客户端事件: connect / audio.append / image.append / text.message / input.mute / input.unmute / interrupt / playback.*
  *   服务端事件: gateway.* / voice.* / turn.started / audio.delta / audio.done / transcript.* / task.* / timeline.inline / error
  */
 
@@ -36,7 +36,7 @@ enum QwenGatewayClientEvent {
             "clientInstanceId": clientInstanceId,
             "takeover": takeover
         ]
-        // 会话级语音前端选择（qwen-audio-agent v1.8.x：未知 provider 名会被网关拒绝而非静默回退）
+        // 会话级语音前端选择（qwen-audio-agent v1.10.1：未知 provider 名会被网关拒绝而非静默回退）
         if let provider {
             payload["provider"] = provider
         }
@@ -51,6 +51,10 @@ enum QwenGatewayClientEvent {
         ["type": "audio.append", "audio": pcmBase64]
     }
 
+    static func imageAppend(jpegBase64: String) -> [String: Any] {
+        ["type": "image.append", "image": jpegBase64, "mimeType": "image/jpeg"]
+    }
+
     static func textMessage(_ text: String) -> [String: Any] {
         ["type": "text.message", "text": text]
     }
@@ -63,8 +67,15 @@ enum QwenGatewayClientEvent {
         ["type": "input.unmute"]
     }
 
-    static func interrupt() -> [String: Any] {
-        ["type": "interrupt"]
+    /// 打断当前回复。`playedMs` 是用户实际听到的音频毫秒数，网关据此发出
+    /// `conversation.item.truncate`，让服务端上下文与用户听到的内容保持一致。
+    /// 传 nil 表示无法确定播放进度（此时退化为仅取消，不截断）。
+    static func interrupt(playedMs: Int? = nil) -> [String: Any] {
+        var payload: [String: Any] = ["type": "interrupt"]
+        if let playedMs, playedMs >= 0 {
+            payload["playedMs"] = playedMs
+        }
+        return payload
     }
 
     static func playbackStarted(responseId: String?) -> [String: Any] {
@@ -75,8 +86,18 @@ enum QwenGatewayClientEvent {
         ["type": "playback.ended", "responseId": responseId ?? ""]
     }
 
-    static func playbackCancelled(responseId: String?) -> [String: Any] {
-        ["type": "playback.cancelled", "responseId": responseId ?? ""]
+    static func playbackCancelled(
+        responseId: String?,
+        reason: String? = nil
+    ) -> [String: Any] {
+        var payload: [String: Any] = [
+            "type": "playback.cancelled",
+            "responseId": responseId ?? ""
+        ]
+        if let reason, !reason.isEmpty {
+            payload["reason"] = reason
+        }
+        return payload
     }
 
     /// 请求网关进入休眠（qwen-audio-agent v1.5+：唤醒词/自动休眠协议）
@@ -126,10 +147,15 @@ enum QwenGatewayEvent: Equatable {
     case clientState(state: String)
     case turnStarted(turnId: String?)
     case playbackClear(reason: String?)
-    case audioDelta(audioBase64: String, sampleRate: Double?, responseId: String?)
+    case audioChunk(
+        pcmData: Data,
+        sampleRate: Double?,
+        responseId: String?,
+        receivedAt: TimeInterval
+    )
     case audioDone(responseId: String?)
     case responseStarted(responseId: String?)
-    case responseInterrupted
+    case responseInterrupted(responseId: String?)
     case transcriptDelta(role: String, text: String)
     case transcriptFinal(role: String, text: String)
     case transcriptDiscard
@@ -143,10 +169,29 @@ enum QwenGatewayEvent: Equatable {
     case unknown(type: String)
 }
 
+extension QwenGatewayEvent {
+    static func audioDelta(
+        audioBase64: String,
+        sampleRate: Double?,
+        responseId: String?,
+        receivedAt: TimeInterval = 0
+    ) -> Self {
+        .audioChunk(
+            pcmData: Data(base64Encoded: audioBase64) ?? Data(),
+            sampleRate: sampleRate,
+            responseId: responseId,
+            receivedAt: receivedAt
+        )
+    }
+}
+
 // MARK: - 解析器
 
 enum QwenGatewayEventParser {
-    static func parse(_ json: [String: Any]) -> QwenGatewayEvent? {
+    static func parse(
+        _ json: [String: Any],
+        receivedAt: TimeInterval = 0
+    ) -> QwenGatewayEvent? {
         guard let type = json["type"] as? String else { return nil }
 
         switch type {
@@ -179,17 +224,23 @@ enum QwenGatewayEventParser {
         case "playback.clear":
             return .playbackClear(reason: json["reason"] as? String)
         case "audio.delta":
-            return .audioDelta(
-                audioBase64: json["audio"] as? String ?? "",
+            guard let audioBase64 = json["audio"] as? String,
+                  let pcmData = Data(base64Encoded: audioBase64),
+                  !pcmData.isEmpty else {
+                return nil
+            }
+            return .audioChunk(
+                pcmData: pcmData,
                 sampleRate: double(json["sampleRate"]),
-                responseId: json["responseId"] as? String
+                responseId: json["responseId"] as? String,
+                receivedAt: receivedAt
             )
         case "audio.done":
             return .audioDone(responseId: json["responseId"] as? String)
         case "response.started":
             return .responseStarted(responseId: json["responseId"] as? String)
         case "response.interrupted":
-            return .responseInterrupted
+            return .responseInterrupted(responseId: json["responseId"] as? String)
         case "transcript.delta":
             return .transcriptDelta(
                 role: json["role"] as? String ?? "",

@@ -4,6 +4,7 @@
  * onto one serial upload queue per realtime service.
  */
 
+import Accelerate
 import AVFoundation
 import Foundation
 import os
@@ -17,6 +18,7 @@ struct RealtimeAudioCapturePerformanceSnapshot: Equatable, Sendable {
     encodedBuffers: 0,
     sentBuffers: 0,
     replacedQueuedBuffers: 0,
+    staleFrameAgeDrops: 0,
     staleGenerationDrops: 0,
     inactiveDrops: 0,
     tapLockContentionDrops: 0,
@@ -44,6 +46,7 @@ struct RealtimeAudioCapturePerformanceSnapshot: Equatable, Sendable {
   let encodedBuffers: Int
   let sentBuffers: Int
   let replacedQueuedBuffers: Int
+  let staleFrameAgeDrops: Int
   let staleGenerationDrops: Int
   let inactiveDrops: Int
   let tapLockContentionDrops: Int
@@ -65,9 +68,10 @@ struct RealtimeAudioCapturePerformanceSnapshot: Equatable, Sendable {
   let maximumEncodingMilliseconds: Double
 
   var droppedBuffers: Int {
-    replacedQueuedBuffers + staleGenerationDrops + inactiveDrops + tapLockContentionDrops
-      + unsupportedFormatDrops + oversizedBufferDrops + encodingFailures
-      + messageBuildFailures + sendFailures + sendTimeouts + queueFullDrops + discardedOnStop
+    replacedQueuedBuffers + staleFrameAgeDrops + staleGenerationDrops + inactiveDrops
+      + tapLockContentionDrops + unsupportedFormatDrops + oversizedBufferDrops
+      + encodingFailures + messageBuildFailures + sendFailures + sendTimeouts
+      + queueFullDrops + discardedOnStop
   }
 
   var isEmpty: Bool {
@@ -128,6 +132,7 @@ private struct RealtimeAudioMetricsWindow {
   var encodedBuffers = 0
   var sentBuffers = 0
   var replacedQueuedBuffers = 0
+  var staleFrameAgeDrops = 0
   var staleGenerationDrops = 0
   var inactiveDrops = 0
   var unsupportedFormatDrops = 0
@@ -301,6 +306,10 @@ final class RealtimeAudioCaptureMailbox: @unchecked Sendable {
     withLock { metrics.messageBuildFailures += 1 }
   }
 
+  func recordStaleFrameAgeDrop() {
+    withLock { metrics.staleFrameAgeDrops += 1 }
+  }
+
   func recordSendSuccess(capturedAt: TimeInterval, sentAt: TimeInterval) {
     withLock {
       let milliseconds = max(0, sentAt - capturedAt) * 1_000
@@ -338,6 +347,7 @@ final class RealtimeAudioCaptureMailbox: @unchecked Sendable {
       encodedBuffers: metrics.encodedBuffers,
       sentBuffers: metrics.sentBuffers,
       replacedQueuedBuffers: metrics.replacedQueuedBuffers,
+      staleFrameAgeDrops: metrics.staleFrameAgeDrops,
       staleGenerationDrops: metrics.staleGenerationDrops,
       inactiveDrops: metrics.inactiveDrops,
       tapLockContentionDrops: contentionDrops,
@@ -466,11 +476,61 @@ final class RealtimeAudioCaptureMailbox: @unchecked Sendable {
   }
 }
 
+struct RealtimeEncodedAudioFrameStats: Equatable, Sendable {
+  let rms: Float
+  let sampleCount: Int
+}
+
+struct RealtimeCapturedAudioFrameStats: Equatable, Sendable {
+  let rms: Float
+  let sampleCount: Int
+  let sampleRate: Double
+
+  var duration: TimeInterval {
+    guard sampleRate.isFinite, sampleRate > 0 else { return 0 }
+    return Double(sampleCount) / sampleRate
+  }
+}
+
+enum RealtimeFloatAudioMeter {
+  static func stats(for buffer: AVAudioPCMBuffer) -> RealtimeCapturedAudioFrameStats? {
+    let sampleCount = Int(buffer.frameLength)
+    let sampleRate = buffer.format.sampleRate
+    guard sampleCount > 0,
+          sampleRate.isFinite,
+          sampleRate > 0,
+          let channels = buffer.floatChannelData else {
+      return nil
+    }
+
+    var peakRMS: Float = 0
+    let vectorLength = vDSP_Length(sampleCount)
+    for channelIndex in 0..<Int(buffer.format.channelCount) {
+      var rms: Float = 0
+      vDSP_rmsqv(channels[channelIndex], 1, &rms, vectorLength)
+      peakRMS = max(peakRMS, rms)
+    }
+    return RealtimeCapturedAudioFrameStats(
+      rms: peakRMS,
+      sampleCount: sampleCount,
+      sampleRate: sampleRate
+    )
+  }
+}
+
+struct PCM16EncodedAudioFrame: Sendable {
+  let data: Data
+  let stats: RealtimeEncodedAudioFrameStats?
+}
+
 final class PCM16AudioEncoder {
   private var inputSampleRate: Double?
   private var inputFormat: AVAudioFormat?
   private var targetFormat: AVAudioFormat?
   private var converter: AVAudioConverter?
+  private var reusableInputBuffer: AVAudioPCMBuffer?
+  private var reusableOutputBuffer: AVAudioPCMBuffer?
+  private(set) var allocatedAudioBufferCount = 0
 
   init(targetSampleRate: Double?) {
     if let targetSampleRate {
@@ -482,9 +542,22 @@ final class PCM16AudioEncoder {
   }
 
   func encode(_ frame: RealtimeAudioCapturedFrame) -> Data? {
+    encode(frame, includeStats: false)?.data
+  }
+
+  func encode(
+    _ frame: RealtimeAudioCapturedFrame,
+    includeStats: Bool
+  ) -> PCM16EncodedAudioFrame? {
     guard !frame.samples.isEmpty,
           frame.sampleRate > 0 else {
       return nil
+    }
+
+    guard let targetFormat, targetFormat.sampleRate != frame.sampleRate else {
+      return frame.samples.withUnsafeBufferPointer { samples in
+        makePCM16Data(from: samples, includeStats: includeStats)
+      }
     }
 
     if inputSampleRate != frame.sampleRate || inputFormat == nil {
@@ -493,30 +566,33 @@ final class PCM16AudioEncoder {
         standardFormatWithSampleRate: frame.sampleRate,
         channels: 1
       )
-      if let inputFormat, let targetFormat, targetFormat.sampleRate != frame.sampleRate {
+      if let inputFormat {
         converter = AVAudioConverter(from: inputFormat, to: targetFormat)
       } else {
         converter = nil
       }
+      reusableInputBuffer = nil
+      reusableOutputBuffer = nil
     }
 
-    guard let inputFormat,
-          let inputBuffer = AVAudioPCMBuffer(
-            pcmFormat: inputFormat,
-            frameCapacity: AVAudioFrameCount(frame.samples.count)
-          ),
+    guard let inputFormat else { return nil }
+    let inputFrameCount = AVAudioFrameCount(frame.samples.count)
+    if reusableInputBuffer?.frameCapacity ?? 0 < inputFrameCount {
+      reusableInputBuffer = AVAudioPCMBuffer(
+        pcmFormat: inputFormat,
+        frameCapacity: inputFrameCount
+      )
+      allocatedAudioBufferCount += 1
+    }
+    guard let inputBuffer = reusableInputBuffer,
           let inputChannel = inputBuffer.floatChannelData?.pointee else {
       return nil
     }
 
-    inputBuffer.frameLength = AVAudioFrameCount(frame.samples.count)
+    inputBuffer.frameLength = inputFrameCount
     frame.samples.withUnsafeBufferPointer { source in
       guard let sourceAddress = source.baseAddress else { return }
       inputChannel.update(from: sourceAddress, count: frame.samples.count)
-    }
-
-    guard let targetFormat, targetFormat.sampleRate != frame.sampleRate else {
-      return makePCM16Data(from: inputBuffer)
     }
 
     guard let converter else { return nil }
@@ -525,12 +601,17 @@ final class PCM16AudioEncoder {
     let outputCapacity = AVAudioFrameCount(
       max(1, (Double(inputBuffer.frameLength) * ratio).rounded(.up) + 32)
     )
-    guard let outputBuffer = AVAudioPCMBuffer(
-      pcmFormat: targetFormat,
-      frameCapacity: outputCapacity
-    ) else {
+    if reusableOutputBuffer?.frameCapacity ?? 0 < outputCapacity {
+      reusableOutputBuffer = AVAudioPCMBuffer(
+        pcmFormat: targetFormat,
+        frameCapacity: outputCapacity
+      )
+      allocatedAudioBufferCount += 1
+    }
+    guard let outputBuffer = reusableOutputBuffer else {
       return nil
     }
+    outputBuffer.frameLength = 0
 
     var didProvideInput = false
     var error: NSError?
@@ -544,25 +625,65 @@ final class PCM16AudioEncoder {
       return inputBuffer
     }
     guard error == nil, status != .error else { return nil }
-    return makePCM16Data(from: outputBuffer)
+    guard let channel = outputBuffer.floatChannelData?.pointee else { return nil }
+    return makePCM16Data(
+      from: UnsafeBufferPointer(start: channel, count: Int(outputBuffer.frameLength)),
+      includeStats: includeStats
+    )
   }
 
-  private func makePCM16Data(from buffer: AVAudioPCMBuffer) -> Data? {
-    guard let channel = buffer.floatChannelData?.pointee else { return nil }
-    let frameCount = Int(buffer.frameLength)
+  private func makePCM16Data(
+    from samples: UnsafeBufferPointer<Float>,
+    includeStats: Bool
+  ) -> PCM16EncodedAudioFrame? {
+    let frameCount = samples.count
     guard frameCount > 0 else { return nil }
 
     var data = Data(count: frameCount * MemoryLayout<Int16>.size)
     var wroteSamples = false
+    var sumOfSquares = 0.0
     data.withUnsafeMutableBytes { (bytes: UnsafeMutableRawBufferPointer) in
       guard let destination = bytes.bindMemory(to: Int16.self).baseAddress else { return }
       wroteSamples = true
       for index in 0..<frameCount {
-        let sample = max(-1.0, min(1.0, channel[index]))
-        destination[index] = Int16(sample * 32_767.0)
+        let sample = max(-1.0, min(1.0, samples[index]))
+        let encoded = Int16(sample * 32_767.0)
+        destination[index] = encoded
+        if includeStats {
+          let value = Double(encoded)
+          sumOfSquares += value * value
+        }
       }
     }
-    return wroteSamples ? data : nil
+    guard wroteSamples else { return nil }
+    let stats = includeStats
+      ? RealtimeEncodedAudioFrameStats(
+          rms: Float(sqrt(sumOfSquares / Double(frameCount)) / 32_768),
+          sampleCount: frameCount
+        )
+      : nil
+    return PCM16EncodedAudioFrame(data: data, stats: stats)
+  }
+}
+
+enum RealtimePCM16AudioMeter {
+  static func stats(for data: Data) -> RealtimeEncodedAudioFrameStats {
+    let sampleCount = data.count / MemoryLayout<Int16>.size
+    guard sampleCount > 0 else {
+      return RealtimeEncodedAudioFrameStats(rms: 0, sampleCount: 0)
+    }
+
+    var sum = 0.0
+    data.withUnsafeBytes { raw in
+      for sample in raw.bindMemory(to: Int16.self) {
+        let value = Double(sample)
+        sum += value * value
+      }
+    }
+    return RealtimeEncodedAudioFrameStats(
+      rms: Float(sqrt(sum / Double(sampleCount)) / 32_768),
+      sampleCount: sampleCount
+    )
   }
 }
 
@@ -573,29 +694,58 @@ private enum RealtimeAudioPerformanceSignposts {
   )
 }
 
+private final class RealtimeCapturedAudioHandlerBox: @unchecked Sendable {
+  typealias Handler = RealtimeAudioUploadPipeline.CapturedAudioHandler
+
+  private var lock = os_unfair_lock_s()
+  private var handler: Handler?
+
+  func store(_ handler: Handler?) {
+    os_unfair_lock_lock(&lock)
+    self.handler = handler
+    os_unfair_lock_unlock(&lock)
+  }
+
+  func load() -> Handler? {
+    os_unfair_lock_lock(&lock)
+    let handler = handler
+    os_unfair_lock_unlock(&lock)
+    return handler
+  }
+}
+
 /// Serializes format conversion and WebSocket delivery. One network send may
 /// be in flight at a time; timeout or send failure discards remaining audio and
 /// lets the owning service converge through its existing error path.
 final class RealtimeAudioUploadPipeline: @unchecked Sendable {
   typealias MessageBuilder = (Data) -> URLSessionWebSocketTask.Message?
+  typealias MessageSender = (
+    URLSessionWebSocketTask.Message,
+    @escaping (Error?) -> Void
+  ) -> Void
   typealias FirstAudioHandler = @MainActor () -> Void
   typealias FailureHandler = @MainActor (String) -> Void
+  typealias CapturedAudioHandler = @Sendable (RealtimeCapturedAudioFrameStats) -> Void
+  typealias EncodedAudioHandler = @MainActor (RealtimeEncodedAudioFrameStats) -> Void
 
   private let queue: DispatchQueue
+  private let drainSource: DispatchSourceUserDataAdd
   private let mailbox: RealtimeAudioCaptureMailbox
   private let encoder: PCM16AudioEncoder
   private let sendTimeout: TimeInterval
+  private let maximumQueuedFrameAge: TimeInterval?
+  private let capturedAudioHandlerBox = RealtimeCapturedAudioHandlerBox()
   private let logger = Logger(
     subsystem: AppIdentity.loggingSubsystem,
     category: "RealtimeAudioUpload"
   )
 
-  private var timer: DispatchSourceTimer?
   private var activeGeneration: Int?
-  private var webSocket: URLSessionWebSocketTask?
   private var messageBuilder: MessageBuilder?
+  private var messageSender: MessageSender?
   private var onFirstAudioSent: FirstAudioHandler?
   private var onFailure: FailureHandler?
+  private var onEncodedAudio: EncodedAudioHandler?
   private var didSendFirstAudio = false
   private var nextSendToken: UInt64 = 0
   private var inFlightSendToken: UInt64?
@@ -607,7 +757,8 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
     targetSampleRate: Double?,
     slotCount: Int = 6,
     maximumFramesPerBuffer: Int = 4_096,
-    sendTimeout: TimeInterval = 2
+    sendTimeout: TimeInterval = 2,
+    maximumQueuedFrameAge: TimeInterval? = nil
   ) {
     queue = DispatchQueue(label: label, qos: .userInitiated)
     mailbox = RealtimeAudioCaptureMailbox(
@@ -616,10 +767,27 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
     )
     encoder = PCM16AudioEncoder(targetSampleRate: targetSampleRate)
     self.sendTimeout = sendTimeout
+    if let maximumQueuedFrameAge,
+       maximumQueuedFrameAge.isFinite,
+       maximumQueuedFrameAge >= 0 {
+      self.maximumQueuedFrameAge = maximumQueuedFrameAge
+    } else {
+      self.maximumQueuedFrameAge = nil
+    }
+
+    let drainSource = DispatchSource.makeUserDataAddSource(queue: queue)
+    self.drainSource = drainSource
+    drainSource.setEventHandler { [weak self] in
+      self?.drainOneBuffer()
+      self?.reportMetricsIfNeeded()
+    }
+    drainSource.resume()
   }
 
   deinit {
     stop()
+    drainSource.setEventHandler {}
+    drainSource.cancel()
   }
 
   func start(
@@ -627,65 +795,85 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
     inputFormat: AVAudioFormat,
     webSocket: URLSessionWebSocketTask,
     messageBuilder: @escaping MessageBuilder,
+    onCapturedAudio: CapturedAudioHandler? = nil,
+    onEncodedAudio: EncodedAudioHandler? = nil,
     onFirstAudioSent: @escaping FirstAudioHandler,
     onFailure: @escaping FailureHandler
   ) {
+    start(
+      generation: generation,
+      inputFormat: inputFormat,
+      messageBuilder: messageBuilder,
+      messageSender: { message, completion in
+        webSocket.send(message, completionHandler: completion)
+      },
+      onCapturedAudio: onCapturedAudio,
+      onEncodedAudio: onEncodedAudio,
+      onFirstAudioSent: onFirstAudioSent,
+      onFailure: onFailure
+    )
+  }
+
+  func start(
+    generation: Int,
+    inputFormat: AVAudioFormat,
+    messageBuilder: @escaping MessageBuilder,
+    messageSender: @escaping MessageSender,
+    onCapturedAudio: CapturedAudioHandler? = nil,
+    onEncodedAudio: EncodedAudioHandler? = nil,
+    onFirstAudioSent: @escaping FirstAudioHandler,
+    onFailure: @escaping FailureHandler
+  ) {
+    capturedAudioHandlerBox.store(onCapturedAudio)
     _ = mailbox.activate(generation: generation, inputFormat: inputFormat)
     queue.sync {
-      cancelTimer()
       cancelInFlightSend()
       activeGeneration = generation
-      self.webSocket = webSocket
       self.messageBuilder = messageBuilder
+      self.messageSender = messageSender
       self.onFirstAudioSent = onFirstAudioSent
       self.onFailure = onFailure
+      self.onEncodedAudio = onEncodedAudio
       didSendFirstAudio = false
       lastMetricsReportAt = ProcessInfo.processInfo.systemUptime
-      startTimer()
     }
   }
 
   func stop() {
     _ = mailbox.deactivateAndClear()
+    capturedAudioHandlerBox.store(nil)
     queue.sync {
       activeGeneration = nil
-      webSocket = nil
       messageBuilder = nil
+      messageSender = nil
       onFirstAudioSent = nil
       onFailure = nil
+      onEncodedAudio = nil
       didSendFirstAudio = false
       cancelInFlightSend()
-      cancelTimer()
     }
   }
 
-  func capture(_ buffer: AVAudioPCMBuffer, generation: Int) {
-    _ = mailbox.capture(buffer, generation: generation)
+  func capture(
+    _ buffer: AVAudioPCMBuffer,
+    generation: Int,
+    capturedAt: TimeInterval = ProcessInfo.processInfo.systemUptime
+  ) {
+    switch mailbox.capture(buffer, generation: generation, capturedAt: capturedAt) {
+    case .accepted, .replacedOldestQueuedBuffer:
+      if let handler = capturedAudioHandlerBox.load(),
+         let stats = RealtimeFloatAudioMeter.stats(for: buffer) {
+        handler(stats)
+      }
+      drainSource.add(data: 1)
+    case .staleGeneration, .inactive, .tapLockContention,
+         .unsupportedFormat, .oversizedBuffer, .queueFull:
+      break
+    }
   }
 
   func snapshot() -> RealtimeAudioCapturePerformanceSnapshot {
     mailbox.snapshot()
-  }
-
-  private func startTimer() {
-    let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(
-      deadline: .now(),
-      repeating: .milliseconds(10),
-      leeway: .milliseconds(2)
-    )
-    timer.setEventHandler { [weak self] in
-      self?.drainOneBuffer()
-      self?.reportMetricsIfNeeded()
-    }
-    self.timer = timer
-    timer.resume()
-  }
-
-  private func cancelTimer() {
-    timer?.setEventHandler {}
-    timer?.cancel()
-    timer = nil
   }
 
   private func cancelInFlightSend() {
@@ -697,24 +885,45 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
   private func drainOneBuffer() {
     guard inFlightSendToken == nil,
           let generation = activeGeneration,
-          let webSocket,
           let messageBuilder,
+          let messageSender,
           let frame = mailbox.takeNext(expectedGeneration: generation) else {
       return
     }
 
+    if let maximumQueuedFrameAge {
+      let frameAge = ProcessInfo.processInfo.systemUptime - frame.capturedAt
+      if !frameAge.isFinite || frameAge > maximumQueuedFrameAge {
+        mailbox.recordStaleFrameAgeDrop()
+        drainSource.add(data: 1)
+        return
+      }
+    }
+
     let encodingStartedAt = ProcessInfo.processInfo.systemUptime
     let encodingSignpost = RealtimeAudioPerformanceSignposts.upload.beginInterval("PCM16Encode")
-    guard let pcm16Data = encoder.encode(frame) else {
+    guard let encodedFrame = encoder.encode(
+      frame,
+      includeStats: onEncodedAudio != nil
+    ) else {
       RealtimeAudioPerformanceSignposts.upload.endInterval("PCM16Encode", encodingSignpost)
       mailbox.recordEncodingFailure()
+      drainSource.add(data: 1)
       return
     }
+    let pcm16Data = encodedFrame.data
     RealtimeAudioPerformanceSignposts.upload.endInterval("PCM16Encode", encodingSignpost)
     mailbox.recordEncoded(duration: ProcessInfo.processInfo.systemUptime - encodingStartedAt)
 
+    if let onEncodedAudio, let stats = encodedFrame.stats {
+      Task { @MainActor in
+        onEncodedAudio(stats)
+      }
+    }
+
     guard let message = messageBuilder(pcm16Data) else {
       mailbox.recordMessageBuildFailure()
+      drainSource.add(data: 1)
       return
     }
 
@@ -729,7 +938,7 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
     queue.asyncAfter(deadline: .now() + sendTimeout, execute: timeout)
 
     let pipeline = self
-    webSocket.send(message) { [weak pipeline] error in
+    messageSender(message) { [weak pipeline] error in
       guard let pipeline else { return }
       pipeline.queue.async {
         pipeline.handleSendCompletion(
@@ -764,12 +973,14 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
       capturedAt: capturedAt,
       sentAt: ProcessInfo.processInfo.systemUptime
     )
-    guard !didSendFirstAudio else { return }
-    didSendFirstAudio = true
-    let callback = onFirstAudioSent
-    Task { @MainActor in
-      callback?()
+    if !didSendFirstAudio {
+      didSendFirstAudio = true
+      let callback = onFirstAudioSent
+      Task { @MainActor in
+        callback?()
+      }
     }
+    drainSource.add(data: 1)
   }
 
   private func handleSendTimeout(token: UInt64, generation: Int) {
@@ -783,15 +994,16 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
   private func fail(generation: Int, message: String) {
     guard activeGeneration == generation else { return }
     _ = mailbox.deactivateAndClear()
+    capturedAudioHandlerBox.store(nil)
     let failure = onFailure
     activeGeneration = nil
-    webSocket = nil
     messageBuilder = nil
+    messageSender = nil
     onFirstAudioSent = nil
     onFailure = nil
+    onEncodedAudio = nil
     didSendFirstAudio = false
     cancelInFlightSend()
-    cancelTimer()
     Task { @MainActor in
       failure?(message)
     }
@@ -806,7 +1018,7 @@ final class RealtimeAudioUploadPipeline: @unchecked Sendable {
     let metrics = mailbox.snapshot(at: now)
     guard !metrics.isEmpty else { return }
     logger.debug(
-      "Audio metrics input=\(metrics.inputBuffers) encoded=\(metrics.encodedBuffers) sent=\(metrics.sentBuffers) queue=\(metrics.currentQueueDepth)/\(metrics.maximumQueueDepth) drops=\(metrics.droppedBuffers) captureToSendMs=\(metrics.averageCaptureToSendMilliseconds) encodeMs=\(metrics.averageEncodingMilliseconds) rate=\(metrics.lastInputSampleRate) channels=\(metrics.lastInputChannelCount)"
+      "Audio metrics input=\(metrics.inputBuffers) encoded=\(metrics.encodedBuffers) sent=\(metrics.sentBuffers) queue=\(metrics.currentQueueDepth)/\(metrics.maximumQueueDepth) drops=\(metrics.droppedBuffers) staleAgeDrops=\(metrics.staleFrameAgeDrops) captureToSendMs=\(metrics.averageCaptureToSendMilliseconds) encodeMs=\(metrics.averageEncodingMilliseconds) rate=\(metrics.lastInputSampleRate) channels=\(metrics.lastInputChannelCount)"
     )
     #endif
   }

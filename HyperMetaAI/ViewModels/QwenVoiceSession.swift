@@ -8,6 +8,7 @@
 
 import AVFoundation
 import Foundation
+import os.lock
 import UIKit
 
 /// 空闲超时检测（纯逻辑，便于测试）
@@ -463,35 +464,61 @@ struct BargeInDetector {
     let energyThreshold: Float
     /// 需要持续超过阈值的最短时长
     let minimumDuration: TimeInterval
+    /// 高置信近讲语音阈值；连续满足时走低延迟快速路径。
+    let fastEnergyThreshold: Float
+    /// 快速路径仍要求连续能量，避免单个短爆音触发。
+    let fastMinimumDuration: TimeInterval
     /// 音频采样率（用于把样本数换算为时长）
     let sampleRate: Double
 
     private(set) var isTriggered = false
     private var highEnergyDuration: TimeInterval = 0
+    private var fastHighEnergyDuration: TimeInterval = 0
 
     init(
         energyThreshold: Float = 0.02,
-        minimumDuration: TimeInterval = 0.25,
+        minimumDuration: TimeInterval = 0.12,
+        fastEnergyThreshold: Float = 0.12,
+        fastMinimumDuration: TimeInterval = 0.04,
         sampleRate: Double = 16_000
     ) {
         self.energyThreshold = energyThreshold
         self.minimumDuration = minimumDuration
+        self.fastEnergyThreshold = max(energyThreshold, fastEnergyThreshold)
+        self.fastMinimumDuration = fastMinimumDuration
         self.sampleRate = sampleRate
     }
 
     /// 消费一个音频缓冲的 RMS 能量；触发后返回 true（之后幂等）。
     mutating func consume(rms: Float, sampleCount: Int) -> Bool {
+        consume(
+            rms: rms,
+            duration: Double(sampleCount) / sampleRate
+        )
+    }
+
+    mutating func consume(rms: Float, duration: TimeInterval) -> Bool {
         guard !isTriggered else { return false }
-        let bufferDuration = Double(sampleCount) / sampleRate
+        guard duration.isFinite, duration > 0 else { return false }
+        let bufferDuration = duration
         if rms >= energyThreshold {
             highEnergyDuration += bufferDuration
-            if highEnergyDuration >= minimumDuration {
-                isTriggered = true
-                return true
-            }
         } else {
             // 低于阈值的短暂间隙不整体清零（避免断句误判），只做半速衰减
             highEnergyDuration = max(0, highEnergyDuration - bufferDuration * 0.5)
+        }
+        if rms >= fastEnergyThreshold {
+            fastHighEnergyDuration += bufferDuration
+        } else {
+            fastHighEnergyDuration = 0
+        }
+        let normalPathTriggered = rms >= energyThreshold
+            && highEnergyDuration >= minimumDuration
+        let fastPathTriggered = rms >= fastEnergyThreshold
+            && fastHighEnergyDuration >= fastMinimumDuration
+        if normalPathTriggered || fastPathTriggered {
+            isTriggered = true
+            return true
         }
         return false
     }
@@ -500,6 +527,247 @@ struct BargeInDetector {
     mutating func reset() {
         isTriggered = false
         highEnergyDuration = 0
+        fastHighEnergyDuration = 0
+    }
+}
+
+/// Keeps full-duplex barge-in detection on the capture path instead of behind
+/// PCM encoding or WebSocket backpressure. Tokens prevent a delayed trigger
+/// from cancelling a newer playback response on the MainActor.
+final class QwenCaptureBargeInGate: @unchecked Sendable {
+    private var lock = os_unfair_lock_s()
+    private var detector: BargeInDetector
+    private var nextToken: UInt64 = 0
+    private var activeToken: UInt64?
+
+    init(detector: BargeInDetector = BargeInDetector()) {
+        self.detector = detector
+    }
+
+    func arm() -> UInt64 {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        nextToken &+= 1
+        detector.reset()
+        activeToken = nextToken
+        return nextToken
+    }
+
+    func disarm() {
+        os_unfair_lock_lock(&lock)
+        activeToken = nil
+        detector.reset()
+        os_unfair_lock_unlock(&lock)
+    }
+
+    func consume(_ stats: RealtimeCapturedAudioFrameStats) -> UInt64? {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        guard let activeToken,
+              detector.consume(rms: stats.rms, duration: stats.duration) else {
+            return nil
+        }
+        self.activeToken = nil
+        return activeToken
+    }
+}
+
+enum QwenAudioRouteRecoveryPolicy {
+    static func reason(from notification: Notification) -> AVAudioSession.RouteChangeReason? {
+        guard let rawValue = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
+        else { return nil }
+        return AVAudioSession.RouteChangeReason(rawValue: rawValue)
+    }
+
+    static func requiresRecovery(for reason: AVAudioSession.RouteChangeReason) -> Bool {
+        switch reason {
+        case .newDeviceAvailable,
+             .oldDeviceUnavailable,
+             .wakeFromSleep,
+             .noSuitableRouteForCategory,
+             .routeConfigurationChange:
+            return true
+        case .unknown, .categoryChange, .override:
+            return false
+        @unknown default:
+            return true
+        }
+    }
+}
+
+@MainActor
+final class QwenAudioRouteRecoveryCoalescer {
+    typealias Action = @MainActor () -> Void
+
+    private let delayNanoseconds: UInt64
+    private var generation = 0
+    private var task: Task<Void, Never>?
+
+    init(delayNanoseconds: UInt64 = 80_000_000) {
+        self.delayNanoseconds = delayNanoseconds
+    }
+
+    func schedule(onFirst: Action, onSettled: @escaping Action) {
+        if task == nil {
+            onFirst()
+        }
+        task?.cancel()
+        generation &+= 1
+        let scheduledGeneration = generation
+        task = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: self?.delayNanoseconds ?? 0)
+            } catch {
+                return
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  self.generation == scheduledGeneration else { return }
+            self.task = nil
+            onSettled()
+        }
+    }
+
+    func cancel() {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+    }
+}
+
+struct QwenAudioCaptureRecoveryPolicy: Equatable {
+    static let defaultRetryDelays: [TimeInterval] = [0.1, 0.25, 0.5]
+
+    let retryDelays: [TimeInterval]
+
+    init(retryDelays: [TimeInterval] = QwenAudioCaptureRecoveryPolicy.defaultRetryDelays) {
+        self.retryDelays = retryDelays.map { $0.isFinite ? max(0, $0) : 0 }
+    }
+
+    func delay(forRetry retry: Int) -> TimeInterval? {
+        guard retry >= 1, retry <= retryDelays.count else { return nil }
+        return retryDelays[retry - 1]
+    }
+}
+
+@MainActor
+final class QwenAudioCaptureRecoveryScheduler {
+    typealias Action = @MainActor () -> Void
+
+    private let policy: QwenAudioCaptureRecoveryPolicy
+    private var generation = 0
+    private var task: Task<Void, Never>?
+    private var retryCount = 0
+
+    init(policy: QwenAudioCaptureRecoveryPolicy = QwenAudioCaptureRecoveryPolicy()) {
+        self.policy = policy
+    }
+
+    @discardableResult
+    func schedule(_ action: @escaping Action) -> Bool {
+        let nextRetry = retryCount + 1
+        guard let delay = policy.delay(forRetry: nextRetry) else { return false }
+
+        task?.cancel()
+        retryCount = nextRetry
+        generation &+= 1
+        let scheduledGeneration = generation
+        task = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            } catch {
+                return
+            }
+            guard let self,
+                  !Task.isCancelled,
+                  self.generation == scheduledGeneration else { return }
+            self.task = nil
+            action()
+        }
+        return true
+    }
+
+    func reset() {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+        retryCount = 0
+    }
+}
+
+/// Bounded tombstones for responses cancelled locally. WebSocket delivery can
+/// race an interrupt, so late audio and completion events must not revive or
+/// terminate a different response.
+struct QwenCancelledResponseRegistry {
+    private let capacity: Int
+    private var identifiers = Set<String>()
+    private var insertionOrder: [String] = []
+
+    init(capacity: Int = 200) {
+        self.capacity = max(1, capacity)
+    }
+
+    mutating func insert(_ identifier: String?) {
+        guard let identifier = Self.normalized(identifier),
+              identifiers.insert(identifier).inserted else { return }
+        insertionOrder.append(identifier)
+        while insertionOrder.count > capacity {
+            identifiers.remove(insertionOrder.removeFirst())
+        }
+    }
+
+    func contains(_ identifier: String?) -> Bool {
+        guard let identifier = Self.normalized(identifier) else { return false }
+        return identifiers.contains(identifier)
+    }
+
+    mutating func removeAll() {
+        identifiers.removeAll(keepingCapacity: true)
+        insertionOrder.removeAll(keepingCapacity: true)
+    }
+
+    static func normalized(_ identifier: String?) -> String? {
+        let value = identifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+}
+
+/// Keeps uncorrelated provider audio behind an explicit response lifecycle.
+/// Qwen's gateway normally supplies response IDs, but the embedded adapter and
+/// older compatible gateways can briefly omit them around cancellation.
+struct QwenResponseOutputGate: Equatable {
+    private(set) var awaitsResponseStart = false
+    private var requiresResponseStart = false
+
+    mutating func reset() {
+        awaitsResponseStart = false
+        requiresResponseStart = false
+    }
+
+    mutating func markCancelled() {
+        awaitsResponseStart = true
+        requiresResponseStart = false
+    }
+
+    mutating func markTransportLost() {
+        awaitsResponseStart = true
+        requiresResponseStart = true
+    }
+
+    mutating func markResponseStarted() {
+        awaitsResponseStart = false
+        requiresResponseStart = false
+    }
+
+    mutating func acceptAudio(hasResponseID: Bool) -> Bool {
+        guard !requiresResponseStart else { return false }
+        guard hasResponseID || !awaitsResponseStart else { return false }
+        awaitsResponseStart = false
+        return true
+    }
+
+    func acceptsTerminal(hasResponseID: Bool) -> Bool {
+        !requiresResponseStart && (hasResponseID || !awaitsResponseStart)
     }
 }
 
@@ -587,6 +855,8 @@ struct AgentTranscriptImport {
 final class QwenVoiceSession: ObservableObject {
     static let shared = QwenVoiceSession()
     static let defaultIdleTimeout: TimeInterval = 120
+    static let audioRouteSettleNanoseconds: UInt64 = 750_000_000
+    static let audioRouteConfigurationSuppressionInterval: TimeInterval = 1.25
 
     @Published private(set) var isActive = false {
         didSet { syncVoiceLiveActivity() }
@@ -594,13 +864,19 @@ final class QwenVoiceSession: ObservableObject {
     @Published private(set) var isInputActive = false {
         didSet { syncVoiceLiveActivity() }
     }
+    /// Provider turn phase. Capture readiness is intentionally separate from
+    /// speech activity so a running microphone cannot look like an endless turn.
+    @Published private(set) var providerVoiceState = "idle"
     @Published private(set) var isSpeaking = false {
         didSet { syncVoiceLiveActivity() }
     }
     /// Normalized microphone energy used by the Metal orb. It is visual-only and never persisted.
     @Published private(set) var inputLevel: Float = 0
-    /// Input pause state used by the single-screen assistant control.
-    @Published private(set) var isInputPaused = false
+    /// Normalized post-mix playback energy. This follows audio actually reaching the speaker.
+    @Published private(set) var outputLevel: Float = 0
+    var orbAudioLevel: Float {
+        isSpeaking ? outputLevel : inputLevel
+    }
     @Published private(set) var connectionState: QwenGatewayConnectionState = .disconnected {
         didSet { syncVoiceLiveActivity() }
     }
@@ -667,12 +943,26 @@ final class QwenVoiceSession: ObservableObject {
     private let gateway: QwenGatewayService
     private let permissionResponder: QwenPermissionResponding
     private var audioEngine: AVAudioEngine?
-    private var audioConverter: AVAudioConverter?
-    private let audioPlaybackPipeline: RealtimeAudioPlaybackPipeline
+    private var captureActivationTask: Task<Void, Never>?
+    private(set) var captureGeneration = 0
+    private let audioUploadPipeline: RealtimeAudioUploadPipeline
+    private let audioPlaybackPipeline: any RealtimeAudioPlaybackControlling
+    private let imageUploadPipeline = RealtimeImageUploadPipeline(
+        label: "com.lunflux.hyper-meta-ai.qwen.image-upload",
+        compressionQuality: 0.62
+    )
     private var playbackGeneration = 0
     private var isInputMuted = false
     private var bargeInDetector = BargeInDetector()
+    private let captureBargeInGate = QwenCaptureBargeInGate()
+    private var captureBargeInToken: UInt64?
+    private var externalSpeechWasActive = false
+    private var lastInputLevelUpdateAt: TimeInterval = 0
     private var activeResponseId: String?
+    private var hasSentPlaybackStartedReceipt = false
+    private var cancelledResponseIDs = QwenCancelledResponseRegistry()
+    private var responseOutputGate = QwenResponseOutputGate()
+    private var realtimeConnectionStatus = QwenRealtimeConnectionStatus()
     private var runningTaskIds = Set<String>()
     private var noticedTaskIds = Set<String>()
     /// 已完成自动进度汇报的任务 ID（避免反复打扰；任务清空时重置）
@@ -699,6 +989,16 @@ final class QwenVoiceSession: ObservableObject {
     private var permissionTimeoutTask: Task<Void, Never>?
     /// 审批超时覆盖值（测试注入用）；nil 时使用 AgentTimingSettings
     private let permissionTimeoutOverride: TimeInterval?
+    private var audioInterruptionObserver: NSObjectProtocol?
+    private var audioSessionInactiveObserver: NSObjectProtocol?
+    private var audioSessionResumptionObserver: NSObjectProtocol?
+    private var mediaServicesResetObserver: NSObjectProtocol?
+    private var audioRouteChangeObserver: NSObjectProtocol?
+    private var audioEngineConfigurationObserver: NSObjectProtocol?
+    private let audioRouteRecoveryCoalescer = QwenAudioRouteRecoveryCoalescer()
+    private let audioCaptureRecoveryScheduler = QwenAudioCaptureRecoveryScheduler()
+    private var audioRouteConfigurationSuppressedUntil: TimeInterval = 0
+    private var isAudioSessionInterrupted = false
     /// 权限决策审计出口（默认写入 AgentAuditStore；测试可注入）
     var auditSink: (AgentAuditEntry) -> Void = { entry in
         AgentAuditStore.append(
@@ -734,7 +1034,6 @@ final class QwenVoiceSession: ObservableObject {
         idleAutoEndEnabled && !AgentPresenceSettings.presenceEnabled
     }
 
-    private let targetInputSampleRate: Double = 16_000
     /// 最近一次唤醒词监听转写（UI 展示聆听状态）
     @Published private(set) var wakeWordTranscript = ""
     /// 最近一次命中的唤醒词文本（UI 反馈）
@@ -746,18 +1045,28 @@ final class QwenVoiceSession: ObservableObject {
         gateway: QwenGatewayService = .shared,
         permissionResponder: QwenPermissionResponding? = nil,
         permissionTimeout: TimeInterval? = nil,
-        wakeWordMonitorFactory: (() -> QwenWakeWordListening)? = nil
+        wakeWordMonitorFactory: (() -> QwenWakeWordListening)? = nil,
+        audioPlaybackPipeline: (any RealtimeAudioPlaybackControlling)? = nil
     ) {
         self.gateway = gateway
         self.permissionResponder = permissionResponder ?? gateway
         self.permissionTimeoutOverride = permissionTimeout
         self.wakeWordMonitorFactory = wakeWordMonitorFactory ?? { QwenSpeechWakeWordMonitor() }
-        self.audioPlaybackPipeline = RealtimeAudioPlaybackPipeline(
+        let audioProfile = RealtimeProviderAudioProfiles.qwen
+        self.audioUploadPipeline = RealtimeAudioUploadPipeline(
+            label: "com.lunflux.hyper-meta-ai.qwen.audio-upload",
+            targetSampleRate: audioProfile.inputSampleRate,
+            slotCount: 4,
+            maximumFramesPerBuffer: 4_096,
+            sendTimeout: audioProfile.uploadSendTimeout,
+            maximumQueuedFrameAge: audioProfile.maximumQueuedInputAge
+        )
+        self.audioPlaybackPipeline = audioPlaybackPipeline ?? RealtimeAudioPlaybackPipeline(
             label: "com.lunflux.hyper-meta-ai.qwen.audio-playback",
-            outputFormat: RealtimePCMOutputFormat.realtimePCM16Mono24kHz,
-            maximumJitterMilliseconds: 200,
-            maximumBufferedResponseMilliseconds: 3_000,
-            maximumBufferedResponseChunks: 64,
+            outputFormat: audioProfile.outputFormat,
+            maximumJitterMilliseconds: audioProfile.maximumJitterMilliseconds,
+            maximumBufferedResponseMilliseconds: audioProfile.maximumBufferedResponseMilliseconds,
+            maximumBufferedResponseChunks: audioProfile.maximumBufferedResponseChunkCount,
             responseBufferOverflowPolicy: .rejectIncoming
         )
     }
@@ -767,6 +1076,7 @@ final class QwenVoiceSession: ObservableObject {
     func start() {
         guard !isActive else { return }
         isActive = true
+        providerVoiceState = "idle"
         errorMessage = nil
         reconnectAttempt = nil
         taskMessage = nil
@@ -791,6 +1101,13 @@ final class QwenVoiceSession: ObservableObject {
         transcriptLog = []
         lastUserText = ""
         lastAssistantText = ""
+        activeResponseId = nil
+        hasSentPlaybackStartedReceipt = false
+        cancelledResponseIDs.removeAll()
+        responseOutputGate.reset()
+        disarmCaptureBargeIn()
+        audioCaptureRecoveryScheduler.reset()
+        isAudioSessionInterrupted = false
         isSleeping = false
         wakeController = QwenWakeSessionController()
         stopWakeWordListening()
@@ -798,19 +1115,38 @@ final class QwenVoiceSession: ObservableObject {
         startIdleWatchdog()
 
         playbackGeneration &+= 1
+        let generation = playbackGeneration
+        imageUploadPipeline.start(generation: generation)
         audioPlaybackPipeline.start(
-            generation: playbackGeneration,
+            generation: generation,
             onFailure: { [weak self] message in
-                Task { @MainActor in self?.errorMessage = message }
-            },
-            onResponsePlaybackComplete: { [weak self] _ in
                 Task { @MainActor in
-                    self?.isSpeaking = false
-                    if let responseId = self?.activeResponseId {
-                        self?.gateway.notifyPlaybackEnded(responseId: responseId)
-                        self?.activeResponseId = nil
+                    guard let self,
+                          self.isActive,
+                          self.playbackGeneration == generation else { return }
+                    self.errorMessage = message
+                }
+            },
+            onResponsePlaybackComplete: { [weak self] completedGeneration in
+                Task { @MainActor in
+                    guard let self,
+                          self.isActive,
+                          self.playbackGeneration == completedGeneration else { return }
+                    self.disarmCaptureBargeIn()
+                    self.isSpeaking = false
+                    self.outputLevel = 0
+                    if let responseId = self.activeResponseId {
+                        self.gateway.notifyPlaybackEnded(responseId: responseId)
+                        self.activeResponseId = nil
+                        self.hasSentPlaybackStartedReceipt = false
                     }
                 }
+            },
+            onAudioLevel: { [weak self] level in
+                guard let self,
+                      self.isActive,
+                      self.playbackGeneration == generation else { return }
+                self.outputLevel = level
             }
         )
 
@@ -819,6 +1155,7 @@ final class QwenVoiceSession: ObservableObject {
         }
         gateway.connect()
         startCapture()
+        startAudioRecoveryObservers()
         AgentWidgetSnapshotCenter.refresh()
     }
 
@@ -826,24 +1163,37 @@ final class QwenVoiceSession: ObservableObject {
         guard isActive else { return }
         isActive = false
         isInputActive = false
+        providerVoiceState = "idle"
         isSpeaking = false
         inputLevel = 0
+        outputLevel = 0
         // 打断（静音）状态必须随会话重置，否则下次会话麦克风保持静音
         isInputMuted = false
-        isInputPaused = false
         bargeInDetector.reset()
+        disarmCaptureBargeIn()
+        externalSpeechWasActive = false
+        lastInputLevelUpdateAt = 0
         reconnectAttempt = nil
         activeResponseId = nil
+        hasSentPlaybackStartedReceipt = false
+        cancelledResponseIDs.removeAll()
+        responseOutputGate.reset()
+        audioCaptureRecoveryScheduler.reset()
+        isAudioSessionInterrupted = false
         idleWatchdogTask?.cancel()
         idleWatchdogTask = nil
         progressCheckInTimer?.invalidate()
         progressCheckInTimer = nil
         cancelPermissionTimeout()
         stopCapture()
+        stopAudioRecoveryObservers()
         stopWakeWordListening()
         isSleeping = false
         wakeController = QwenWakeSessionController()
+        realtimeConnectionStatus.markDisconnected()
+        publishRealtimeConnectionStatus()
         audioPlaybackPipeline.stop()
+        imageUploadPipeline.stop()
         gateway.onEvent = nil
         gateway.disconnect()
         AgentWidgetSnapshotCenter.refresh()
@@ -1260,6 +1610,16 @@ final class QwenVoiceSession: ObservableObject {
         idleMonitor.recordActivity()
     }
 
+    /// Replays a turn already present in the local transcript after switching
+    /// from a failed backend to a fresh native Qwen realtime session.
+    func sendTextWithoutTranscript(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        lastUserText = trimmed
+        gateway.sendText(trimmed)
+        idleMonitor.recordActivity()
+    }
+
     /// 刷新空闲看门狗：持续在场开关切换后立即生效（关闭时重新评估自动结束）
     func refreshIdleWatchdog() {
         startIdleWatchdog()
@@ -1284,35 +1644,171 @@ final class QwenVoiceSession: ObservableObject {
     /// 打断当前输出并静音输入（幂等：已静音时不重复发送）
     func interrupt() {
         guard !isInputMuted else { return }
-        gateway.interrupt()
-        audioPlaybackPipeline.interrupt(generation: playbackGeneration)
+        let cancelled = cancelActivePlayback()
+        if let responseId = cancelled.responseId {
+            gateway.notifyPlaybackCancelled(
+                responseId: responseId,
+                reason: "user_interruption"
+            )
+        }
+        gateway.interrupt(playedMs: cancelled.playedMilliseconds)
+        audioUploadPipeline.stop()
         gateway.setInputMuted(true)
         isInputMuted = true
-        isInputPaused = true
         inputLevel = 0
-        isSpeaking = false
-        activeResponseId = nil
     }
 
     /// 自然语音打断（barge-in）：本地检测到用户开口，立即停止播报，
     /// 但保持麦克风输入，让网关继续接收用户当前说的话。
+    ///
+    /// 注意这里**不能**用 `guard isSpeaking` 收口：用户完全有理由在
+    /// thinking 阶段（首个音频块还没到）就改主意开口，此时若不打断，
+    /// 那条正在生成的回复稍后会突然插进用户的新话里。判断条件因此改为
+    /// "有在途输出即可打断"。
     func bargeIn() {
-        guard isSpeaking else { return }
-        gateway.interrupt()
-        audioPlaybackPipeline.interrupt(generation: playbackGeneration)
-        if let responseId = activeResponseId {
-            gateway.notifyPlaybackCancelled(responseId: responseId)
+        let hasInFlightOutput = isSpeaking
+            || activeResponseId != nil
+            || providerVoiceState == "thinking"
+        guard hasInFlightOutput else { return }
+        let cancelled = cancelActivePlayback()
+        if let responseId = cancelled.responseId {
+            gateway.notifyPlaybackCancelled(
+                responseId: responseId,
+                reason: "user_interruption"
+            )
+        }
+        gateway.interrupt(playedMs: cancelled.playedMilliseconds)
+    }
+
+    private func handleCaptureSideBargeIn(token: UInt64) {
+        guard isActive,
+              captureBargeInToken == token else { return }
+        bargeIn()
+    }
+
+    private func disarmCaptureBargeIn() {
+        captureBargeInToken = nil
+        captureBargeInGate.disarm()
+    }
+
+    /// Cancel an in-flight answer before injecting a glasses frame, while keeping input live.
+    func prepareForVisionInjection() {
+        let cancelled = cancelActivePlayback()
+        if let responseId = cancelled.responseId {
+            gateway.notifyPlaybackCancelled(
+                responseId: responseId,
+                reason: "user_interruption"
+            )
+        }
+        gateway.interrupt(playedMs: cancelled.playedMilliseconds)
+    }
+
+    /// 取消在途播放，并回报用户实际听到的毫秒数（用于 truncate）。
+    struct CancelledPlayback {
+        let responseId: String?
+        let playedMilliseconds: Int
+    }
+
+    @discardableResult
+    private func cancelActivePlayback() -> CancelledPlayback {
+        // interrupt() 内部先取快照再清零，所以这里拿到的是"被打断前真正播出去"的量。
+        let playedMilliseconds = audioPlaybackPipeline.interrupt(generation: playbackGeneration)
+        let responseId = clearActivePlaybackState(markResponseCancelled: true)
+        return CancelledPlayback(
+            responseId: responseId,
+            playedMilliseconds: playedMilliseconds
+        )
+    }
+
+    @discardableResult
+    private func clearActivePlaybackState(markResponseCancelled: Bool) -> String? {
+        let responseId = activeResponseId
+        disarmCaptureBargeIn()
+        if markResponseCancelled {
+            cancelledResponseIDs.insert(responseId)
+            responseOutputGate.markCancelled()
         }
         activeResponseId = nil
+        hasSentPlaybackStartedReceipt = false
+        outputLevel = 0
         isSpeaking = false
+        return responseId
+    }
+
+    private func invalidatePlaybackForAudioSystemFailure() {
+        let hasInFlightOutput = activeResponseId != nil
+            || hasSentPlaybackStartedReceipt
+            || isSpeaking
+        let playedMilliseconds = audioPlaybackPipeline
+            .invalidateAudioSystem(generation: playbackGeneration)
+        let responseId = clearActivePlaybackState(
+            markResponseCancelled: hasInFlightOutput
+        )
+        if let responseId {
+            gateway.notifyPlaybackCancelled(
+                responseId: responseId,
+                reason: "playback_error"
+            )
+        }
+        // 音频系统失败同样会让用户只听到半句话；若不截断，模型仍以为整段
+        // 都播出去了。这里与 barge-in 走同一条纠正路径。
+        if hasInFlightOutput {
+            gateway.interrupt(playedMs: playedMilliseconds)
+        }
+    }
+
+    private func stopRealtimeAudioForTransportLoss() {
+        cancelledResponseIDs.insert(activeResponseId)
+        responseOutputGate.markTransportLost()
+        disarmCaptureBargeIn()
+        audioUploadPipeline.stop()
+        audioPlaybackPipeline.interrupt(generation: playbackGeneration)
+        activeResponseId = nil
+        hasSentPlaybackStartedReceipt = false
+        providerVoiceState = "idle"
+        isInputActive = false
+        isSpeaking = false
+        inputLevel = 0
+        outputLevel = 0
+    }
+
+    /// Sends a Ray-Ban frame directly when the selected embedded Omni transport supports images.
+    var supportsDirectVision: Bool {
+        gateway.supportsDirectVision && gateway.connectionState.isOnline
+    }
+
+    @discardableResult
+    func sendVisionFrame(_ image: UIImage, prompt: String) -> Bool {
+        guard isActive, supportsDirectVision else { return false }
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let generation = playbackGeneration
+        let result = imageUploadPipeline.submit(image, generation: generation) { [weak self] data in
+            Task { @MainActor in
+                guard let self, self.isActive, self.playbackGeneration == generation else { return }
+                guard self.gateway.sendImage(jpegData: data) else { return }
+                self.gateway.sendText(trimmed)
+                self.transcriptLog.append(QwenTranscriptItem(
+                    role: .system,
+                    text: "qwen.voice.vision.sent".localized
+                ))
+                self.idleMonitor.recordActivity()
+            }
+        }
+        return result.isAccepted
     }
 
     /// 恢复输入聆听（幂等：未静音时不重复发送）
     func resume() {
+        if !isSleeping,
+           wakeWordMonitor == nil,
+           audioEngine?.isRunning != true {
+            restartCapture()
+        }
         guard isInputMuted else { return }
         gateway.setInputMuted(false)
         isInputMuted = false
-        isInputPaused = false
+        startAudioUploadPipelineIfPossible()
         idleMonitor.recordActivity()
     }
 
@@ -1340,9 +1836,7 @@ final class QwenVoiceSession: ObservableObject {
             return
         }
         if isSleeping {
-            wakeController.wakeCompleted()
-            isSleeping = false
-            stopWakeWordListening()
+            beginWakeTransition()
             gateway.requestWake()
         }
         resume()
@@ -1357,11 +1851,58 @@ final class QwenVoiceSession: ObservableObject {
 
     /// 收到网关 client.state: sleeping（或用户手动休眠）后统一进入休眠状态
     private func enterSleepState() {
+        realtimeConnectionStatus.markSleeping()
+        publishRealtimeConnectionStatus()
+        applySleepTransitionSideEffects()
+    }
+
+    private func applySleepTransitionSideEffects() {
+        guard connectionState == .sleeping else { return }
+        errorMessage = nil
         guard !isSleeping else { return }
+        audioCaptureRecoveryScheduler.reset()
+        stopRealtimeAudioForTransportLoss()
         isSleeping = true
         wakeController.enterSleep()
         if Self.wakeWordEnabled {
             beginWakeWordListening()
+        } else {
+            stopCapture()
+        }
+    }
+
+    private func beginWakeTransition() {
+        realtimeConnectionStatus.markWaking()
+        publishRealtimeConnectionStatus()
+        applyWakeTransitionSideEffects()
+    }
+
+    private func applyWakeTransitionSideEffects() {
+        guard connectionState == .waking else { return }
+        if isSleeping {
+            isSleeping = false
+            stopWakeWordListening()
+            wakeController.wakeCompleted()
+        }
+        errorMessage = nil
+    }
+
+    private func applyConnectedTransitionSideEffects() {
+        guard connectionState == .connected else { return }
+        if isSleeping {
+            isSleeping = false
+            stopWakeWordListening()
+            wakeController.wakeCompleted()
+        }
+        reconnectAttempt = nil
+        errorMessage = nil
+        startAudioUploadPipelineIfPossible()
+    }
+
+    private func publishRealtimeConnectionStatus() {
+        let nextState = realtimeConnectionStatus.connectionState
+        if connectionState != nextState {
+            connectionState = nextState
         }
     }
 
@@ -1381,6 +1922,9 @@ final class QwenVoiceSession: ObservableObject {
     /// 启动唤醒词监听（休眠 + 开关开启时）
     private func beginWakeWordListening() {
         guard Self.wakeWordEnabled else { return }
+        // Speech recognition and the realtime gateway must not install two
+        // simultaneous input taps. Keep the session claim while swapping engines.
+        stopCapture(releaseAudioSession: false)
         wakeController.startListening()
         let monitor = wakeWordMonitorFactory()
         monitor.onTranscript = { [weak self] text in
@@ -1410,10 +1954,8 @@ final class QwenVoiceSession: ObservableObject {
     private func handleWakeWord(_ text: String) {
         guard isSleeping, wakeController.phase == .listening else { return }
         wakeController.matchWakeWord()
-        stopWakeWordListening()
-        isSleeping = false
-        wakeController.wakeCompleted()
         lastWakeWordText = text
+        beginWakeTransition()
         gateway.requestWake()
         resume()
     }
@@ -1465,127 +2007,488 @@ final class QwenVoiceSession: ObservableObject {
 
     // MARK: - Audio Capture
 
-    private func startCapture() {
-        do {
-            try AudioSessionCoordinator.shared.activate(.qwenVoice, profile: .voiceChat)
-            let engine = AVAudioEngine()
-            audioEngine = engine
-
-            let inputNode = engine.inputNode
-            let inputFormat = inputNode.outputFormat(forBus: 0)
-            inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-                guard let self else { return }
-                let pcm = Self.pcm16Mono(buffer, targetSampleRate: self.targetInputSampleRate, converter: &self.audioConverter)
-                guard let pcm else { return }
-                let rms = Self.rmsEnergy(pcm)
-                Task { @MainActor [weak self] in
-                    guard let self, self.isActive, !self.isInputMuted else { return }
-                    self.inputLevel = Self.orbInputLevel(rms: rms)
-                    // 播报期间检测到持续语音能量：本地立即打断，无需等网关往返
-                    if self.isSpeaking,
-                       self.bargeInDetector.consume(
-                           rms: rms,
-                           sampleCount: pcm.count / MemoryLayout<Int16>.size
-                       ) {
-                        self.bargeIn()
-                    }
-                    self.idleMonitor.recordActivity()
-                    self.gateway.sendAudio(pcmData: pcm)
+    private func startCapture(stopSessionOnFailure: Bool = true) {
+        suppressRouteConfigurationRecovery()
+        captureActivationTask?.cancel()
+        captureGeneration &+= 1
+        let generation = captureGeneration
+        captureActivationTask = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            do {
+                try await AudioSessionCoordinator.shared.activateAsync(
+                    .qwenVoice,
+                    profile: .voiceChat
+                )
+                guard !Task.isCancelled,
+                      self.isActive,
+                      !self.isSleeping,
+                      !self.isAudioSessionInterrupted,
+                      self.captureGeneration == generation else { return }
+                try await Task.sleep(nanoseconds: Self.audioRouteSettleNanoseconds)
+                guard !Task.isCancelled,
+                      self.isActive,
+                      !self.isSleeping,
+                      !self.isAudioSessionInterrupted,
+                      self.captureGeneration == generation else { return }
+                try self.startCaptureEngine()
+                self.audioCaptureRecoveryScheduler.reset()
+                self.errorMessage = nil
+            } catch {
+                guard self.isActive, self.captureGeneration == generation else { return }
+                self.errorMessage = error.localizedDescription
+                if stopSessionOnFailure {
+                    self.stop()
+                } else {
+                    self.audioUploadPipeline.stop()
+                    self.isInputActive = false
+                    self.inputLevel = 0
+                    self.scheduleAudioCaptureRecovery()
                 }
             }
+        }
+    }
 
+    private func startCaptureEngine() throws {
+        let engine = AVAudioEngine()
+        audioEngine = engine
+        var didInstallInputTap = false
+        do {
+            try AppleVoiceAudioFrontEnd.configure(engine)
+            let inputNode = engine.inputNode
+            let inputFormat = inputNode.outputFormat(forBus: 0)
+            guard inputFormat.sampleRate > 0,
+                  inputFormat.channelCount > 0 else {
+                throw VoiceAudioFrontEndError.inputFormatUnavailable
+            }
+            let generation = captureGeneration
+            startAudioUploadPipeline(inputFormat: inputFormat, generation: generation)
+            let uploadPipeline = audioUploadPipeline
+            inputNode.installTap(
+                onBus: 0,
+                bufferSize: 2048,
+                // Let AVAudioEngine provide the route's actual tap format.
+                // VPIO can renegotiate the input format after activation;
+                // pinning the pre-start format can yield a running engine with
+                // no usable tap callbacks on standalone iPhone routes.
+                format: nil
+            ) { [uploadPipeline] buffer, _ in
+                uploadPipeline.capture(buffer, generation: generation)
+            }
+            didInstallInputTap = true
+            observeConfigurationChanges(for: engine)
             engine.prepare()
             try engine.start()
-            isInputActive = true
+            // The gateway can become ready while the audio graph is settling.
+            // Re-bind after the engine is running so that transition is not
+            // lost between the initial readiness check and the first tap.
+            startAudioUploadPipelineIfPossible()
+            audioPlaybackPipeline.prepare(generation: playbackGeneration)
         } catch {
-            errorMessage = error.localizedDescription
-            isActive = false
+            audioUploadPipeline.stop()
+            stopObservingAudioEngineConfigurationChanges()
+            if didInstallInputTap {
+                engine.inputNode.removeTap(onBus: 0)
+            }
+            engine.stop()
+            audioEngine = nil
+            throw error
+        }
+    }
+
+    var isCaptureEngineRunning: Bool {
+        audioEngine?.isRunning == true
+    }
+
+    private func observeConfigurationChanges(for engine: AVAudioEngine) {
+        stopObservingAudioEngineConfigurationChanges()
+        audioEngineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { [weak self, weak engine] _ in
+            // AVAudioEngine posts this on an internal queue and forbids teardown
+            // inside the callback. Hop to MainActor before replacing the graph.
+            Task { @MainActor [weak self, weak engine] in
+                guard let self,
+                      let engine,
+                      self.audioEngine === engine else { return }
+                self.handleAudioEngineConfigurationChange()
+            }
+        }
+    }
+
+    private func stopObservingAudioEngineConfigurationChanges() {
+        guard let audioEngineConfigurationObserver else { return }
+        NotificationCenter.default.removeObserver(audioEngineConfigurationObserver)
+        self.audioEngineConfigurationObserver = nil
+    }
+
+    private func startAudioUploadPipelineIfPossible() {
+        guard let engine = audioEngine, engine.isRunning else { return }
+        startAudioUploadPipeline(
+            inputFormat: engine.inputNode.outputFormat(forBus: 0),
+            generation: captureGeneration
+        )
+    }
+
+    private func startAudioUploadPipeline(
+        inputFormat: AVAudioFormat,
+        generation: Int
+    ) {
+        guard isActive else {
+            audioUploadPipeline.stop()
+            return
+        }
+        guard !isSleeping else {
+            audioUploadPipeline.stop()
+            return
+        }
+        guard !isInputMuted else {
+            audioUploadPipeline.stop()
+            return
+        }
+        guard captureGeneration == generation else {
+            audioUploadPipeline.stop()
+            return
+        }
+        guard gateway.connectionState.isOnline else {
+            audioUploadPipeline.stop()
+            return
+        }
+
+        let transport = gateway.audioTransport
+        let captureBargeInGate = captureBargeInGate
+        audioUploadPipeline.start(
+            generation: generation,
+            inputFormat: inputFormat,
+            messageBuilder: Self.makeAudioUploadMessage,
+            messageSender: { message, completion in
+                transport.send(message, completion: completion)
+            },
+            onCapturedAudio: { [weak self] stats in
+                guard let token = captureBargeInGate.consume(stats) else { return }
+                Task { @MainActor in
+                    self?.handleCaptureSideBargeIn(token: token)
+                }
+            },
+            onEncodedAudio: { [weak self] stats in
+                self?.consumeInputAudioStats(stats, generation: generation)
+            },
+            onFirstAudioSent: {},
+            onFailure: { [weak self] message in
+                guard let self,
+                      self.isActive,
+                      self.captureGeneration == generation else { return }
+                self.errorMessage = message
+                self.gateway.recoverFromAudioTransportFailure()
+            }
+        )
+    }
+
+    private static func makeAudioUploadMessage(
+        _ pcmData: Data
+    ) -> URLSessionWebSocketTask.Message? {
+        let payload = QwenGatewayClientEvent.audioAppend(
+            pcmBase64: pcmData.base64EncodedString()
+        )
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return .string(text)
+    }
+
+    private func consumeInputAudioStats(
+        _ stats: RealtimeEncodedAudioFrameStats,
+        generation: Int
+    ) {
+        guard isActive,
+              !isInputMuted,
+              captureGeneration == generation else { return }
+
+        // Keep every encoded frame for external speech detection, but publish
+        // visual energy at 12.5 Hz so microphone activity cannot drive full-screen SwiftUI work.
+        let externalSpeechIsActive = TTSService.shared.isSpeaking
+        if externalSpeechIsActive, !externalSpeechWasActive {
+            bargeInDetector.reset()
+        }
+        externalSpeechWasActive = externalSpeechIsActive
+        if externalSpeechIsActive,
+           bargeInDetector.consume(rms: stats.rms, sampleCount: stats.sampleCount) {
+            TTSService.shared.stop()
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastInputLevelUpdateAt >= 0.08 {
+            lastInputLevelUpdateAt = now
+            inputLevel = Self.orbInputLevel(rms: stats.rms)
+        }
+        if stats.rms >= bargeInDetector.energyThreshold {
+            idleMonitor.recordActivity()
         }
     }
 
     /// 归一化 RMS 能量（0~1），用于本地 barge-in 检测
     static func rmsEnergy(_ data: Data) -> Float {
-        let sampleCount = data.count / MemoryLayout<Int16>.size
-        guard sampleCount > 0 else { return 0 }
-        var sum = 0.0
-        data.withUnsafeBytes { raw in
-            let samples = raw.bindMemory(to: Int16.self)
-            for sample in samples {
-                let value = Double(sample)
-                sum += value * value
-            }
-        }
-        return Float(sqrt(sum / Double(sampleCount)) / 32_768.0)
+        RealtimePCM16AudioMeter.stats(for: data).rms
     }
 
     static func orbInputLevel(rms: Float) -> Float {
         min(max(rms * 8, 0), 1)
     }
 
-    private func stopCapture() {
+    private func stopCapture(
+        releaseAudioSession: Bool = true,
+        resetRecovery: Bool = true
+    ) {
+        if resetRecovery {
+            audioCaptureRecoveryScheduler.reset()
+        }
+        captureActivationTask?.cancel()
+        captureActivationTask = nil
+        captureGeneration &+= 1
+        audioUploadPipeline.stop()
+        isInputActive = false
         inputLevel = 0
+        stopObservingAudioEngineConfigurationChanges()
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         audioEngine = nil
-        audioConverter = nil
-        AudioSessionCoordinator.shared.deactivate(.qwenVoice)
+        if releaseAudioSession {
+            AudioSessionCoordinator.shared.deactivateAsync(.qwenVoice)
+        }
     }
 
-    /// Float32 → 16kHz mono PCM16（与 OpenClawASRService 一致的模式）
-    private static func pcm16Mono(
-        _ input: AVAudioPCMBuffer,
-        targetSampleRate: Double,
-        converter: inout AVAudioConverter?
-    ) -> Data? {
-        guard let outputFormat = AVAudioFormat(
-            standardFormatWithSampleRate: targetSampleRate,
-            channels: 1
-        ) else {
-            return nil
+    /// Foreground return is a recovery hint, not a new session. Background audio remains active.
+    func recoverAfterForeground() {
+        guard isActive else { return }
+        if isSleeping,
+           Self.wakeWordEnabled,
+           wakeWordMonitor?.isMonitoring != true {
+            restartWakeWordListening()
+        } else if !isSleeping, audioEngine?.isRunning != true {
+            restartCapture()
         }
+        if !gateway.hasActiveTransport {
+            gateway.connect()
+        }
+    }
 
-        let inputBuffer: AVAudioPCMBuffer
-        if input.format.sampleRate != targetSampleRate || input.format.channelCount != 1 {
-            if converter == nil || converter?.inputFormat != input.format {
-                converter = AVAudioConverter(from: input.format, to: outputFormat)
-            }
-            guard let converter else { return nil }
-            let ratio = targetSampleRate / input.format.sampleRate
-            let outputFrameCount = AVAudioFrameCount(Double(input.frameLength) * ratio)
-            guard let resampled = AVAudioPCMBuffer(
-                pcmFormat: outputFormat,
-                frameCapacity: outputFrameCount
-            ) else {
-                return nil
-            }
-            var hasProvidedInput = false
-            var error: NSError?
-            converter.convert(to: resampled, error: &error) { _, outStatus in
-                if hasProvidedInput {
-                    outStatus.pointee = .noDataNow
-                    return nil
+    private func restartCapture() {
+        audioCaptureRecoveryScheduler.reset()
+        performAudioCaptureRecoveryAttempt()
+    }
+
+    private func performAudioCaptureRecoveryAttempt() {
+        suppressRouteConfigurationRecovery()
+        stopCapture(resetRecovery: false)
+        guard isActive, !isSleeping, !isAudioSessionInterrupted else { return }
+        startCapture(stopSessionOnFailure: false)
+    }
+
+    private func scheduleAudioCaptureRecovery() {
+        guard isActive, !isSleeping, !isAudioSessionInterrupted else { return }
+        audioCaptureRecoveryScheduler.schedule { [weak self] in
+            guard let self,
+                  self.isActive,
+                  !self.isSleeping,
+                  !self.isAudioSessionInterrupted else { return }
+            self.performAudioCaptureRecoveryAttempt()
+        }
+    }
+
+    private func startAudioRecoveryObservers() {
+        stopAudioRecoveryObservers()
+        let center = NotificationCenter.default
+        let audioSession = AVAudioSession.sharedInstance()
+        if #available(iOS 27.0, *) {
+            audioSessionInactiveObserver = center.addObserver(
+                forName: AVAudioSession.didBecomeInactiveNotification,
+                object: audioSession,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleAudioSessionBecameInactive(notification)
                 }
-                hasProvidedInput = true
-                outStatus.pointee = .haveData
-                return input
             }
-            guard error == nil else { return nil }
-            inputBuffer = resampled
+            audioSessionResumptionObserver = center.addObserver(
+                forName: AVAudioSession.resumptionRecommendationNotification,
+                object: audioSession,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleAudioSessionResumptionRecommendation(notification)
+                }
+            }
         } else {
-            inputBuffer = input
+            audioInterruptionObserver = center.addObserver(
+                forName: AVAudioSession.interruptionNotification,
+                object: audioSession,
+                queue: .main
+            ) { [weak self] notification in
+                Task { @MainActor in
+                    self?.handleAudioInterruption(notification)
+                }
+            }
+        }
+        mediaServicesResetObserver = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification,
+            object: audioSession,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.isActive else { return }
+                self.handleMediaServicesReset()
+            }
+        }
+        audioRouteChangeObserver = center.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: audioSession,
+            queue: .main
+        ) { [weak self] notification in
+            Task { @MainActor in
+                guard let self, self.isActive else { return }
+                self.handleAudioRouteChange(notification)
+            }
+        }
+    }
+
+    private func stopAudioRecoveryObservers() {
+        audioRouteRecoveryCoalescer.cancel()
+        let center = NotificationCenter.default
+        if let audioInterruptionObserver {
+            center.removeObserver(audioInterruptionObserver)
+            self.audioInterruptionObserver = nil
+        }
+        if let audioSessionInactiveObserver {
+            center.removeObserver(audioSessionInactiveObserver)
+            self.audioSessionInactiveObserver = nil
+        }
+        if let audioSessionResumptionObserver {
+            center.removeObserver(audioSessionResumptionObserver)
+            self.audioSessionResumptionObserver = nil
+        }
+        if let mediaServicesResetObserver {
+            center.removeObserver(mediaServicesResetObserver)
+            self.mediaServicesResetObserver = nil
+        }
+        if let audioRouteChangeObserver {
+            center.removeObserver(audioRouteChangeObserver)
+            self.audioRouteChangeObserver = nil
+        }
+    }
+
+    func handleMediaServicesReset() {
+        audioRouteRecoveryCoalescer.cancel()
+        suppressRouteConfigurationRecovery()
+        quiesceRealtimeAudioForSystemFailure()
+        if isSleeping, Self.wakeWordEnabled {
+            restartWakeWordListening()
+        } else {
+            restartCapture()
+        }
+    }
+
+    func handleAudioInterruption(_ notification: Notification) {
+        guard let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+              let type = AVAudioSession.InterruptionType(rawValue: rawType) else { return }
+        switch type {
+        case .began:
+            beginAudioSessionInterruption()
+        case .ended:
+            endAudioSessionInterruption()
+        @unknown default:
+            break
+        }
+    }
+
+    @available(iOS 27.0, *)
+    func handleAudioSessionBecameInactive(_ notification: Notification) {
+        guard let context = notification.userInfo?[AVAudioSession.deactivationContextKey]
+                as? AVAudioSession.DeactivationContext,
+              context.source == .system else { return }
+        beginAudioSessionInterruption()
+    }
+
+    @available(iOS 27.0, *)
+    func handleAudioSessionResumptionRecommendation(_ notification: Notification) {
+        guard let context = notification.userInfo?[AVAudioSession.resumptionContextKey]
+                as? AVAudioSession.ResumptionContext,
+              context.recommendation == .shouldResume else { return }
+        endAudioSessionInterruption()
+    }
+
+    private func beginAudioSessionInterruption() {
+        guard !isAudioSessionInterrupted else { return }
+        isAudioSessionInterrupted = true
+        audioRouteRecoveryCoalescer.cancel()
+        quiesceRealtimeAudioForSystemFailure()
+    }
+
+    private func endAudioSessionInterruption() {
+        guard isAudioSessionInterrupted else { return }
+        isAudioSessionInterrupted = false
+        guard isActive else { return }
+        suppressRouteConfigurationRecovery()
+        if isSleeping, Self.wakeWordEnabled {
+            restartWakeWordListening()
+        } else {
+            restartCapture()
+        }
+    }
+
+    func handleAudioEngineConfigurationChange() {
+        guard !isAudioSessionInterrupted else { return }
+        scheduleAudioSystemRecovery()
+    }
+
+    func handleAudioRouteChange(_ notification: Notification) {
+        guard !isAudioSessionInterrupted,
+              let reason = QwenAudioRouteRecoveryPolicy.reason(from: notification),
+              QwenAudioRouteRecoveryPolicy.requiresRecovery(for: reason) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if reason == .routeConfigurationChange,
+           now < audioRouteConfigurationSuppressedUntil {
+            return
         }
 
-        guard let floatData = inputBuffer.floatChannelData else { return nil }
-        let frameLength = Int(inputBuffer.frameLength)
-        var pcmData = Data(count: frameLength * 2)
-        pcmData.withUnsafeMutableBytes { raw in
-            guard let ptr = raw.baseAddress?.assumingMemoryBound(to: Int16.self) else { return }
-            for i in 0..<frameLength {
-                let sample = max(-1.0, min(1.0, floatData[0][i]))
-                ptr[i] = Int16(sample * 32767.0)
+        scheduleAudioSystemRecovery()
+    }
+
+    private func scheduleAudioSystemRecovery() {
+        audioRouteRecoveryCoalescer.schedule(
+            onFirst: { [weak self] in
+                guard let self else { return }
+                self.quiesceRealtimeAudioForSystemFailure()
+            },
+            onSettled: { [weak self] in
+                guard let self,
+                      self.isActive,
+                      !self.isAudioSessionInterrupted else { return }
+                self.suppressRouteConfigurationRecovery()
+                if self.isSleeping, Self.wakeWordEnabled {
+                    self.restartWakeWordListening()
+                } else if !self.isSleeping {
+                    self.restartCapture()
+                }
             }
-        }
-        return pcmData
+        )
+    }
+
+    private func quiesceRealtimeAudioForSystemFailure() {
+        audioCaptureRecoveryScheduler.reset()
+        stopWakeWordListening()
+        stopCapture(releaseAudioSession: false, resetRecovery: false)
+        invalidatePlaybackForAudioSystemFailure()
+        providerVoiceState = "idle"
+        outputLevel = 0
+    }
+
+    private func suppressRouteConfigurationRecovery() {
+        audioRouteConfigurationSuppressedUntil = max(
+            audioRouteConfigurationSuppressedUntil,
+            ProcessInfo.processInfo.systemUptime
+                + Self.audioRouteConfigurationSuppressionInterval
+        )
     }
 
     // MARK: - Gateway Events
@@ -1595,43 +2498,154 @@ final class QwenVoiceSession: ObservableObject {
         idleMonitor.recordActivity()
         switch event {
         case .voiceReady:
-            connectionState = .connected
+            realtimeConnectionStatus.markReady()
+            publishRealtimeConnectionStatus()
+            applyConnectedTransitionSideEffects()
         case .voiceConnection(let state, let message):
+            realtimeConnectionStatus.applyVoiceConnection(state: state, message: message)
+            publishRealtimeConnectionStatus()
             if state == "connected" {
-                connectionState = .connected
+                applyConnectedTransitionSideEffects()
+            } else if state == "waking" {
+                applyWakeTransitionSideEffects()
+            } else if state == "connecting" {
+                errorMessage = nil
+            } else if state == "sleeping" {
+                applySleepTransitionSideEffects()
             } else if state == "unavailable" {
-                connectionState = .failed(message ?? "Voice front end unavailable")
+                if hasSentPlaybackStartedReceipt, let activeResponseId {
+                    gateway.notifyPlaybackCancelled(
+                        responseId: activeResponseId,
+                        reason: "playback_error"
+                    )
+                }
+                stopRealtimeAudioForTransportLoss()
             }
         case .voiceState(let state):
+            providerVoiceState = state
             isInputActive = (state == "listening")
         case .voiceSleep(let state):
-            connectionState = state == "enabled" ? .failed("Voice front end is sleeping") : connectionState
-        case .clientState(let state):
-            // 网关请求客户端进入休眠（等待唤醒词）；其他状态忽略
+            realtimeConnectionStatus.applyVoiceSleep(state: state)
+            publishRealtimeConnectionStatus()
             if state == "sleeping" {
-                enterSleepState()
+                applySleepTransitionSideEffects()
+            } else if state == "detected" {
+                applyWakeTransitionSideEffects()
+            } else if state == "awake" {
+                if gateway.connectionState == .connected {
+                    realtimeConnectionStatus.markConnected()
+                    publishRealtimeConnectionStatus()
+                    applyConnectedTransitionSideEffects()
+                }
             }
-        case .audioDelta(let base64, _, let responseId):
-            guard let data = Data(base64Encoded: base64) else { return }
+        case .clientState(let state):
+            realtimeConnectionStatus.applyClientState(state: state)
+            publishRealtimeConnectionStatus()
+            if state == "sleeping" {
+                applySleepTransitionSideEffects()
+            } else if state == "awake" {
+                if gateway.connectionState == .connected {
+                    realtimeConnectionStatus.markConnected()
+                    publishRealtimeConnectionStatus()
+                    applyConnectedTransitionSideEffects()
+                } else {
+                    applyWakeTransitionSideEffects()
+                }
+            }
+        case .turnStarted:
+            // Provider VAD is a second full-duplex barge-in path when local energy detection misses.
+            // 不再用 isSpeaking 收口：thinking 阶段服务端检测到新一轮开口同样要打断，
+            // 否则那条还在生成的回复会插进用户的新话里。bargeIn() 自带空转保护。
+            bargeIn()
+        case .responseStarted(let responseId):
+            let responseId = QwenCancelledResponseRegistry.normalized(responseId)
+            if let responseId {
+                guard !cancelledResponseIDs.contains(responseId) else { return }
+                if let activeResponseId, activeResponseId != responseId {
+                    // 服务端自己换了 response，说明它已经知道旧的那条作废了，
+                    // 这里只报播放取消，不再回发 interrupt/truncate。
+                    let superseded = cancelActivePlayback()
+                    if let supersededResponseId = superseded.responseId {
+                        gateway.notifyPlaybackCancelled(responseId: supersededResponseId)
+                    }
+                }
+                if activeResponseId != responseId {
+                    hasSentPlaybackStartedReceipt = false
+                }
+                activeResponseId = responseId
+                responseOutputGate.markResponseStarted()
+            } else if activeResponseId == nil {
+                hasSentPlaybackStartedReceipt = false
+                responseOutputGate.markResponseStarted()
+            }
+        case .audioChunk(let data, _, let responseId, let receivedAt):
+            guard !isInputMuted else { return }
+            let responseId = QwenCancelledResponseRegistry.normalized(responseId)
+            guard !cancelledResponseIDs.contains(responseId) else { return }
+            guard responseOutputGate.acceptAudio(hasResponseID: responseId != nil) else { return }
+            if let activeResponseId,
+               let responseId,
+               activeResponseId != responseId {
+                let superseded = cancelActivePlayback()
+                if let supersededResponseId = superseded.responseId {
+                    gateway.notifyPlaybackCancelled(responseId: supersededResponseId)
+                }
+            }
+            let enqueueResult = audioPlaybackPipeline.enqueue(
+                data,
+                generation: playbackGeneration,
+                receivedAt: receivedAt.isFinite && receivedAt > 0
+                    ? receivedAt
+                    : ProcessInfo.processInfo.systemUptime
+            )
+            guard enqueueResult.isAccepted else { return }
             if activeResponseId == nil {
                 activeResponseId = responseId
-                gateway.notifyPlaybackStarted(responseId: responseId)
+            }
+            if !hasSentPlaybackStartedReceipt {
+                gateway.notifyPlaybackStarted(responseId: activeResponseId ?? responseId)
+                hasSentPlaybackStartedReceipt = true
             }
             // 新一轮播报开始：重置打断检测（每次响应只允许打断一次）
             if !isSpeaking {
                 bargeInDetector.reset()
+                captureBargeInToken = captureBargeInGate.arm()
+                isSpeaking = true
             }
-            _ = audioPlaybackPipeline.enqueue(data, generation: playbackGeneration)
-            isSpeaking = true
-        case .audioDone:
+        case .audioDone(let responseId):
+            let responseId = QwenCancelledResponseRegistry.normalized(responseId)
+            guard !cancelledResponseIDs.contains(responseId) else { return }
+            guard responseOutputGate.acceptsTerminal(hasResponseID: responseId != nil) else { return }
+            if let activeResponseId,
+               let responseId,
+               activeResponseId != responseId {
+                return
+            }
+            if activeResponseId == nil, responseId != nil {
+                return
+            }
             audioPlaybackPipeline.finishResponse(generation: playbackGeneration)
-        case .responseInterrupted, .playbackClear:
-            audioPlaybackPipeline.interrupt(generation: playbackGeneration)
-            if let responseId = activeResponseId {
-                gateway.notifyPlaybackCancelled(responseId: responseId)
+        case .responseInterrupted(let responseId):
+            let responseId = QwenCancelledResponseRegistry.normalized(responseId)
+            cancelledResponseIDs.insert(responseId)
+            if responseId == nil {
+                responseOutputGate.markCancelled()
             }
-            activeResponseId = nil
-            isSpeaking = false
+            guard responseId == nil || responseId == activeResponseId else { return }
+            // 这两条都是服务端主动通知的取消，服务端上下文已经自洽，
+            // 所以只回报播放状态，不再补 interrupt/truncate。
+            let cancelled = cancelActivePlayback()
+            if let cancelledResponseId = cancelled.responseId {
+                gateway.notifyPlaybackCancelled(responseId: cancelledResponseId)
+            }
+        case .playbackClear(let reason):
+            let cleared = cancelActivePlayback()
+            if let clearedResponseId = cleared.responseId {
+                gateway.notifyPlaybackCancelled(
+                    responseId: clearedResponseId,
+                    reason: reason
+                )
+            }
         case .transcriptDelta(let role, let text):
             if role == "user" { lastUserText = text } else { lastAssistantText = text }
         case .transcriptFinal(let role, let text):
@@ -1641,6 +2655,9 @@ final class QwenVoiceSession: ObservableObject {
                     role: role == "user" ? .user : .assistant,
                     text: text
                 ))
+            }
+            if role == "user", let intent = AgentVisionIntentParser.parse(text) {
+                onVisionRequest?(intent)
             }
         case .task(let type, let taskId, let title):
             trackTaskStatus(type: type, taskId: taskId, title: title)
@@ -1695,14 +2712,23 @@ final class QwenVoiceSession: ObservableObject {
         case .error(let message):
             errorMessage = message
         case .gatewayReconnecting(let attempt, let maxAttempts):
+            stopRealtimeAudioForTransportLoss()
+            inputLevel = 0
             reconnectAttempt = attempt
             reconnectMaxAttempts = maxAttempts
-            connectionState = .connecting
+            realtimeConnectionStatus.beginConnecting(resetLifecycle: true)
+            publishRealtimeConnectionStatus()
         case .gatewayReconnectFailed:
+            stopRealtimeAudioForTransportLoss()
+            inputLevel = 0
             reconnectAttempt = nil
-            connectionState = .failed("qwen.error.reconnect.limit".localized)
+            realtimeConnectionStatus.markUnavailable("qwen.error.reconnect.limit".localized)
+            publishRealtimeConnectionStatus()
         case .gatewayDisconnected:
-            connectionState = .disconnected
+            stopRealtimeAudioForTransportLoss()
+            inputLevel = 0
+            realtimeConnectionStatus.markDisconnected()
+            publishRealtimeConnectionStatus()
             reconnectAttempt = nil
         default:
             break
@@ -1711,6 +2737,8 @@ final class QwenVoiceSession: ObservableObject {
 
     /// 空闲超时回调（View 用于提示）
     var onIdleTimeout: (() -> Void)?
+    /// Explicit visual language asks the owning view to capture one glasses frame on demand.
+    var onVisionRequest: ((AgentVisionIntent) -> Void)?
 
     /// 语音会话状态 → 锁屏 Live Activity 同步：
     /// 会话活跃时展示「聆听 / 思考 / 回复 / 休眠 / 连接」状态行（高于任务进度）；

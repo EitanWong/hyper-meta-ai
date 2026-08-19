@@ -106,6 +106,7 @@ final class QwenSpeechWakeWordMonitor: NSObject, QwenWakeWordListening, SFSpeech
         request.taskHint = .dictation
         recognitionRequest = request
 
+        try AppleVoiceAudioFrontEnd.configure(audioEngine)
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in

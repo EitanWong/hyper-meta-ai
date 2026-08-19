@@ -34,11 +34,38 @@ final class QwenGatewayModelsTests: XCTestCase {
     XCTAssertEqual(payload["audio"] as? String, "AQID")
   }
 
+  func testImageAppendPayload() {
+    let payload = QwenGatewayClientEvent.imageAppend(jpegBase64: "AQID")
+    XCTAssertEqual(payload["type"] as? String, "image.append")
+    XCTAssertEqual(payload["image"] as? String, "AQID")
+    XCTAssertEqual(payload["mimeType"] as? String, "image/jpeg")
+  }
+
   func testTextAndInterruptPayloads() {
     XCTAssertEqual(QwenGatewayClientEvent.textMessage("你好")["text"] as? String, "你好")
     XCTAssertEqual(QwenGatewayClientEvent.interrupt()["type"] as? String, "interrupt")
+    XCTAssertNil(
+      QwenGatewayClientEvent.interrupt()["playedMs"],
+      "播放进度未知时不应带 playedMs，网关据此跳过 truncate"
+    )
+    XCTAssertEqual(QwenGatewayClientEvent.interrupt(playedMs: 0)["playedMs"] as? Int, 0)
+    XCTAssertEqual(QwenGatewayClientEvent.interrupt(playedMs: 640)["playedMs"] as? Int, 640)
+    XCTAssertNil(QwenGatewayClientEvent.interrupt(playedMs: -1)["playedMs"])
     XCTAssertEqual(QwenGatewayClientEvent.inputMute()["type"] as? String, "input.mute")
     XCTAssertEqual(QwenGatewayClientEvent.inputUnmute()["type"] as? String, "input.unmute")
+  }
+
+  func testPlaybackCancelledPayloadCarriesOptionalReason() {
+    let interrupted = QwenGatewayClientEvent.playbackCancelled(
+      responseId: "r1",
+      reason: "user_interruption"
+    )
+    XCTAssertEqual(interrupted["type"] as? String, "playback.cancelled")
+    XCTAssertEqual(interrupted["responseId"] as? String, "r1")
+    XCTAssertEqual(interrupted["reason"] as? String, "user_interruption")
+
+    let unspecified = QwenGatewayClientEvent.playbackCancelled(responseId: "r2")
+    XCTAssertNil(unspecified["reason"])
   }
 
   func testParseVoiceReady() {
@@ -60,13 +87,45 @@ final class QwenGatewayModelsTests: XCTestCase {
   }
 
   func testParseAudioDeltaAndDone() {
-    XCTAssertEqual(
-      parse(["type": "audio.delta", "audio": "AAA", "sampleRate": 24_000, "responseId": "r1"]),
-      .audioDelta(audioBase64: "AAA", sampleRate: 24_000, responseId: "r1")
+    let receivedAt = 42.5
+    let event = QwenGatewayEventParser.parse(
+      ["type": "audio.delta", "audio": "AQIDBA==", "sampleRate": 24_000, "responseId": "r1"],
+      receivedAt: receivedAt
     )
+    guard case .audioChunk(let data, let sampleRate, let responseId, let timestamp) = event else {
+      return XCTFail("audio.delta should be decoded at the protocol boundary")
+    }
+    XCTAssertEqual(data, Data([1, 2, 3, 4]))
+    XCTAssertEqual(sampleRate, 24_000)
+    XCTAssertEqual(responseId, "r1")
+    XCTAssertEqual(timestamp, receivedAt)
     XCTAssertEqual(
       parse(["type": "audio.done", "responseId": "r1"]),
       .audioDone(responseId: "r1")
+    )
+  }
+
+  func testParseAudioDeltaRejectsMissingEmptyAndMalformedPCM() {
+    XCTAssertNil(parse(["type": "audio.delta"]))
+    XCTAssertNil(parse(["type": "audio.delta", "audio": ""]))
+    XCTAssertNil(parse(["type": "audio.delta", "audio": "%%%"] ))
+  }
+
+  func testParseResponseInterruptedPreservesResponseID() {
+    XCTAssertEqual(
+      parse(["type": "response.interrupted", "responseId": "r1"]),
+      .responseInterrupted(responseId: "r1")
+    )
+    XCTAssertEqual(
+      parse(["type": "response.interrupted"]),
+      .responseInterrupted(responseId: nil)
+    )
+  }
+
+  func testParseResponseStartedPreservesResponseID() {
+    XCTAssertEqual(
+      parse(["type": "response.started", "responseId": "r1"]),
+      .responseStarted(responseId: "r1")
     )
   }
 

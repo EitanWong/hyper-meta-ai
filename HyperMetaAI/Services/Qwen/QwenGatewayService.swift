@@ -17,11 +17,119 @@ enum QwenGatewayConnectionState: Equatable {
     case disconnected
     case connecting
     case connected
+    case sleeping
+    case waking
     case failed(String)
 
     var isOnline: Bool {
         if case .connected = self { return true }
         return false
+    }
+}
+
+struct QwenRealtimeConnectionStatus: Equatable {
+    private(set) var unavailableMessage: String?
+    private(set) var sleeping = false
+    private(set) var waking = false
+    private(set) var ready = false
+    private(set) var connecting = false
+
+    var connectionState: QwenGatewayConnectionState {
+        if let unavailableMessage { return .failed(unavailableMessage) }
+        if sleeping { return .sleeping }
+        if waking { return .waking }
+        if ready { return .connected }
+        if connecting { return .connecting }
+        return .disconnected
+    }
+
+    mutating func beginConnecting(resetLifecycle: Bool) {
+        unavailableMessage = nil
+        ready = false
+        connecting = true
+        if resetLifecycle {
+            sleeping = false
+            waking = false
+        }
+    }
+
+    mutating func markReady() {
+        ready = true
+        connecting = false
+    }
+
+    mutating func markConnected() {
+        unavailableMessage = nil
+        sleeping = false
+        waking = false
+        ready = true
+        connecting = false
+    }
+
+    mutating func markUnavailable(_ message: String) {
+        unavailableMessage = message
+        ready = false
+        connecting = false
+    }
+
+    mutating func markSleeping() {
+        sleeping = true
+        waking = false
+        ready = false
+        connecting = false
+    }
+
+    mutating func markWaking() {
+        sleeping = false
+        waking = true
+    }
+
+    mutating func markDisconnected() {
+        self = QwenRealtimeConnectionStatus()
+    }
+
+    mutating func applyVoiceConnection(state: String, message: String?) {
+        switch state {
+        case "connected":
+            markConnected()
+        case "waking":
+            markWaking()
+        case "connecting":
+            beginConnecting(resetLifecycle: false)
+        case "sleeping":
+            let hasWakeFailure = !(message?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty ?? true)
+            if !waking || hasWakeFailure {
+                markSleeping()
+            }
+        case "unavailable":
+            markUnavailable(message ?? "Voice front end unavailable")
+        default:
+            break
+        }
+    }
+
+    mutating func applyVoiceSleep(state: String) {
+        switch state {
+        case "sleeping" where !waking:
+            markSleeping()
+        case "detected":
+            markWaking()
+        default:
+            break
+        }
+    }
+
+    mutating func applyClientState(state: String) {
+        switch state {
+        case "sleeping" where !waking:
+            markSleeping()
+        case "awake" where sleeping:
+            markWaking()
+        default:
+            break
+        }
     }
 }
 
@@ -117,12 +225,82 @@ struct QwenReconnectPolicy {
 protocol QwenGatewaySocket: AnyObject {
     func send(_ string: String, completion: @escaping (Error?) -> Void)
     func receive(completion: @escaping (Result<String, Error>) -> Void)
+    func sendPing(completion: @escaping (Error?) -> Void)
     func close()
+}
+
+/// Internal transports can provide already-decoded events and avoid rebuilding
+/// Gateway JSON only for the App to parse it again.
+protocol QwenGatewayDecodedEventSocket: AnyObject {
+    func receiveEvent(completion: @escaping (Result<QwenGatewayEvent, Error>) -> Void)
+}
+
+extension QwenGatewaySocket {
+    func sendPing(completion: @escaping (Error?) -> Void) {
+        completion(nil)
+    }
+}
+
+/// Thread-safe audio-only bridge used by the realtime upload queue. Control
+/// events remain MainActor-isolated, while PCM serialization and delivery never
+/// compete with SwiftUI updates.
+final class QwenGatewayAudioTransport: @unchecked Sendable {
+    private let lock = NSLock()
+    private var socket: QwenGatewaySocket?
+
+    func attach(_ socket: QwenGatewaySocket) {
+        lock.lock()
+        self.socket = socket
+        lock.unlock()
+    }
+
+    func detach(_ socket: QwenGatewaySocket?) {
+        lock.lock()
+        if let socket, self.socket === socket {
+            self.socket = nil
+        } else if socket == nil {
+            self.socket = nil
+        }
+        lock.unlock()
+    }
+
+    func send(
+        _ message: URLSessionWebSocketTask.Message,
+        completion: @escaping (Error?) -> Void
+    ) {
+        guard case .string(let text) = message else {
+            completion(QwenGatewayError.invalidMessage)
+            return
+        }
+        lock.lock()
+        let socket = socket
+        lock.unlock()
+        guard let socket else {
+            completion(URLError(.notConnectedToInternet))
+            return
+        }
+        socket.send(text, completion: completion)
+    }
+}
+
+private final class QwenGatewaySendSettlement: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSettled = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !isSettled else { return false }
+        isSettled = true
+        return true
+    }
 }
 
 @MainActor
 final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
     static let shared = QwenGatewayService()
+
+    nonisolated let audioTransport = QwenGatewayAudioTransport()
 
     // MARK: - Published State
 
@@ -150,11 +328,22 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
     private var embeddedSocketFactory: (QwenEmbeddedGatewayConfiguration) -> QwenGatewaySocket
     private var embeddedConfigurationProvider: () -> QwenEmbeddedGatewayConfiguration?
     private let preferences: UserDefaults
+    private let decodeQueue = DispatchQueue(
+        label: "com.lunflux.hyper-meta-ai.qwen.gateway-decode",
+        qos: .userInitiated
+    )
     private var socket: QwenGatewaySocket?
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    private var heartbeatTask: Task<Void, Never>?
+    private var heartbeatTimeoutTask: Task<Void, Never>?
+    private var pendingHeartbeatID: UUID?
     private var isUserDisconnect = false
     private var reconnectPolicy: QwenReconnectPolicy
+    private var realtimeConnectionStatus = QwenRealtimeConnectionStatus()
+    private let heartbeatInterval: TimeInterval
+    private let heartbeatTimeout: TimeInterval
+    private let criticalControlTimeout: TimeInterval
     private var clientInstanceId = UUID().uuidString
     /// 是否允许网关输出语音回复（大脑模式关闭：仅作 ASR 听写）
     var outputEnabled = true
@@ -168,7 +357,10 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
             QwenEmbeddedGatewaySocket(configuration: configuration)
         },
         embeddedConfigurationProvider: (() -> QwenEmbeddedGatewayConfiguration?)? = nil,
-        maxReconnectAttempts: Int = 5
+        maxReconnectAttempts: Int = 5,
+        heartbeatInterval: TimeInterval = 12,
+        heartbeatTimeout: TimeInterval = 5,
+        criticalControlTimeout: TimeInterval = RealtimeProviderAudioProfiles.qwen.criticalControlSendTimeout
     ) {
         self.preferences = preferences
         self.mode = QwenGatewayMode(
@@ -186,6 +378,11 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         self.reconnectPolicy = QwenReconnectPolicy(
             maxConsecutiveFailures: maxReconnectAttempts
         )
+        self.heartbeatInterval = heartbeatInterval
+        self.heartbeatTimeout = heartbeatTimeout
+        self.criticalControlTimeout = criticalControlTimeout.isFinite
+            ? max(0.001, criticalControlTimeout)
+            : RealtimeProviderAudioProfiles.qwen.criticalControlSendTimeout
     }
 
     func saveSettings() {
@@ -198,7 +395,16 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
 
     // MARK: - Connection
 
+    /// The Gateway WebSocket can stay healthy while its realtime provider is
+    /// unavailable or reconnecting. Callers use this transport signal instead
+    /// of opening a second Gateway owner from provider-level state alone.
+    var hasActiveTransport: Bool {
+        socket != nil
+    }
+
     func connect() {
+        guard !hasActiveTransport else { return }
+        if case .connecting = connectionState { return }
         guard !connectionState.isOnline else { return }
         isUserDisconnect = false
         reconnectPolicy.reset()
@@ -210,33 +416,51 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         isUserDisconnect = true
         reconnectTask?.cancel()
         receiveTask?.cancel()
-        socket?.close()
+        stopHeartbeat()
+        let closingSocket = socket
+        audioTransport.detach(closingSocket)
+        closingSocket?.close()
         socket = nil
         voiceState = "idle"
-        connectionState = .disconnected
+        realtimeConnectionStatus.markDisconnected()
+        publishRealtimeConnectionStatus()
         onEvent?(.gatewayDisconnected)
+    }
+
+    /// A timed-out audio send means the realtime stream can no longer meet its
+    /// latency contract. Reconnect immediately instead of leaving a visually
+    /// connected but silent session running.
+    func recoverFromAudioTransportFailure() {
+        guard socket != nil, !isUserDisconnect else { return }
+        handleSocketClosed()
     }
 
     private func connectOnce() {
         guard !isUserDisconnect else { return }
-        connectionState = .connecting
+        realtimeConnectionStatus.beginConnecting(resetLifecycle: true)
+        publishRealtimeConnectionStatus()
         let socket: QwenGatewaySocket
         switch mode {
         case .builtIn:
             guard let configuration = embeddedConfigurationProvider() else {
-                connectionState = .failed(QwenGatewayError.builtInAPIKeyMissing.localizedDescription)
+                realtimeConnectionStatus.markUnavailable(
+                    QwenGatewayError.builtInAPIKeyMissing.localizedDescription
+                )
+                publishRealtimeConnectionStatus()
                 onEvent?(.error(message: QwenGatewayError.builtInAPIKeyMissing.localizedDescription))
                 return
             }
             socket = embeddedSocketFactory(configuration)
         case .external:
             guard let url = webSocketURL else {
-                connectionState = .failed("Invalid gateway URL")
+                realtimeConnectionStatus.markUnavailable("Invalid gateway URL")
+                publishRealtimeConnectionStatus()
                 return
             }
             socket = socketFactory(URLRequest(url: url))
         }
         self.socket = socket
+        audioTransport.attach(socket)
 
         let connectPayload = QwenGatewayClientEvent.connect(
             timeZone: TimeZone.current.identifier,
@@ -251,20 +475,29 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         send(connectPayload, via: socket)
 
         receiveLoop(on: socket)
+        startHeartbeat(on: socket)
     }
 
     private func handleSocketClosed() {
-        guard self.socket != nil else { return }
+        guard let closedSocket = self.socket else { return }
+        stopHeartbeat()
+        audioTransport.detach(closedSocket)
         socket = nil
+        closedSocket.close()
         voiceState = "idle"
-        connectionState = .disconnected
+        realtimeConnectionStatus.markDisconnected()
+        publishRealtimeConnectionStatus()
         onEvent?(.gatewayDisconnected)
         scheduleReconnectIfAllowed()
     }
 
     private func handleConnectionFailure(_ error: Error) {
-        connectionState = .failed(error.localizedDescription)
-        socket?.close()
+        stopHeartbeat()
+        realtimeConnectionStatus.markUnavailable(error.localizedDescription)
+        publishRealtimeConnectionStatus()
+        let failedSocket = socket
+        audioTransport.detach(failedSocket)
+        failedSocket?.close()
         socket = nil
         scheduleReconnectIfAllowed()
     }
@@ -272,7 +505,8 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
     private func scheduleReconnectIfAllowed() {
         guard !isUserDisconnect else { return }
         guard reconnectPolicy.recordFailure() else {
-            connectionState = .failed("qwen.error.reconnect.limit".localized)
+            realtimeConnectionStatus.markUnavailable("qwen.error.reconnect.limit".localized)
+            publishRealtimeConnectionStatus()
             onEvent?(.gatewayReconnectFailed)
             return
         }
@@ -290,6 +524,60 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         }
     }
 
+    private func startHeartbeat(on socket: QwenGatewaySocket) {
+        stopHeartbeat()
+        guard heartbeatInterval > 0 else { return }
+        heartbeatTask = Task { [weak self, weak socket] in
+            guard let self, let socket else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(self.heartbeatInterval * 1_000_000_000))
+                guard !Task.isCancelled, self.socket === socket else { return }
+                self.sendHeartbeat(on: socket)
+            }
+        }
+    }
+
+    private func sendHeartbeat(on socket: QwenGatewaySocket) {
+        guard self.socket === socket, pendingHeartbeatID == nil else { return }
+        let heartbeatID = UUID()
+        pendingHeartbeatID = heartbeatID
+
+        heartbeatTimeoutTask?.cancel()
+        if heartbeatTimeout > 0 {
+            heartbeatTimeoutTask = Task { [weak self, weak socket] in
+                guard let self, let socket else { return }
+                try? await Task.sleep(nanoseconds: UInt64(self.heartbeatTimeout * 1_000_000_000))
+                guard !Task.isCancelled,
+                      self.socket === socket,
+                      self.pendingHeartbeatID == heartbeatID else { return }
+                self.pendingHeartbeatID = nil
+                self.handleSocketClosed()
+            }
+        }
+
+        socket.sendPing { [weak self, weak socket] error in
+            Task { @MainActor in
+                guard let self, let socket,
+                      self.socket === socket,
+                      self.pendingHeartbeatID == heartbeatID else { return }
+                self.pendingHeartbeatID = nil
+                self.heartbeatTimeoutTask?.cancel()
+                self.heartbeatTimeoutTask = nil
+                if error != nil {
+                    self.handleSocketClosed()
+                }
+            }
+        }
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        heartbeatTimeoutTask?.cancel()
+        heartbeatTimeoutTask = nil
+        pendingHeartbeatID = nil
+    }
+
     // MARK: - Receive
 
     private func nextMessage(from socket: QwenGatewaySocket) async throws -> String {
@@ -305,26 +593,58 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         }
     }
 
+    private func nextEvent(
+        from socket: QwenGatewayDecodedEventSocket
+    ) async throws -> QwenGatewayEvent {
+        try await withCheckedThrowingContinuation { continuation in
+            socket.receiveEvent { result in
+                continuation.resume(with: result)
+            }
+        }
+    }
+
     private func receiveLoop(on socket: QwenGatewaySocket) {
         receiveTask?.cancel()
         receiveTask = Task { [weak self] in
             while let self, !Task.isCancelled {
                 guard self.socket === socket else { return }
-                let message: String
+                let event: QwenGatewayEvent?
                 do {
-                    message = try await self.nextMessage(from: socket)
+                    if let decodedSocket = socket as? QwenGatewayDecodedEventSocket {
+                        event = try await self.nextEvent(from: decodedSocket)
+                    } else {
+                        let message = try await self.nextMessage(from: socket)
+                        let receivedAt = ProcessInfo.processInfo.systemUptime
+                        event = await self.decode(message, receivedAt: receivedAt)
+                    }
                 } catch {
                     guard !Task.isCancelled else { return }
                     self.handleSocketClosed()
                     return
                 }
-                guard let data = message.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let event = QwenGatewayEventParser.parse(json)
-                else {
-                    continue
-                }
+                guard let event else { continue }
+                guard !Task.isCancelled, self.socket === socket else { return }
                 self.handle(event)
+            }
+        }
+    }
+
+    private func decode(
+        _ message: String,
+        receivedAt: TimeInterval
+    ) async -> QwenGatewayEvent? {
+        await withCheckedContinuation { continuation in
+            decodeQueue.async {
+                guard let data = message.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: QwenGatewayEventParser.parse(
+                    json,
+                    receivedAt: receivedAt
+                ))
             }
         }
     }
@@ -332,19 +652,26 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
     private func handle(_ event: QwenGatewayEvent) {
         switch event {
         case .voiceReady:
-            connectionState = .connected
+            realtimeConnectionStatus.markReady()
+            publishRealtimeConnectionStatus()
             reconnectPolicy.recordSuccess()
-        case .voiceConnection(let state, _):
+        case .voiceConnection(let state, let message):
+            realtimeConnectionStatus.applyVoiceConnection(state: state, message: message)
+            publishRealtimeConnectionStatus()
             if state == "connected" {
-                connectionState = .connected
                 reconnectPolicy.recordSuccess()
-            } else if state == "unavailable" {
-                connectionState = .failed("Voice front end unavailable")
             }
         case .voiceState(let state):
             voiceState = state
+        case .voiceSleep(let state):
+            realtimeConnectionStatus.applyVoiceSleep(state: state)
+            publishRealtimeConnectionStatus()
+        case .clientState(let state):
+            realtimeConnectionStatus.applyClientState(state: state)
+            publishRealtimeConnectionStatus()
         case .gatewayDisconnected:
-            connectionState = .disconnected
+            realtimeConnectionStatus.markDisconnected()
+            publishRealtimeConnectionStatus()
         default:
             break
         }
@@ -353,8 +680,16 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
 
     // MARK: - Send
 
-    func sendAudio(pcmData: Data) {
-        send(QwenGatewayClientEvent.audioAppend(pcmBase64: pcmData.base64EncodedString()))
+    var supportsDirectVision: Bool {
+        mode == .builtIn
+            && QwenRealtimeModelCatalog.selected.supportsImageInput
+    }
+
+    @discardableResult
+    func sendImage(jpegData: Data) -> Bool {
+        guard supportsDirectVision, connectionState.isOnline, !jpegData.isEmpty else { return false }
+        send(QwenGatewayClientEvent.imageAppend(jpegBase64: jpegData.base64EncodedString()))
+        return true
     }
 
     func sendText(_ text: String) {
@@ -363,36 +698,55 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         send(QwenGatewayClientEvent.textMessage(trimmed))
     }
 
-    func interrupt() {
-        send(QwenGatewayClientEvent.interrupt())
+    /// 打断当前回复。`playedMs` 为用户实际听到的音频毫秒数；内置网关会据此
+    /// 补发 `conversation.item.truncate`，避免服务端保留用户没听到的内容。
+    func interrupt(playedMs: Int? = nil) {
+        sendControl(
+            QwenGatewayClientEvent.interrupt(playedMs: playedMs),
+            timeout: criticalControlTimeout
+        )
     }
 
     func setInputMuted(_ muted: Bool) {
-        send(muted ? QwenGatewayClientEvent.inputMute() : QwenGatewayClientEvent.inputUnmute())
+        sendControl(muted ? QwenGatewayClientEvent.inputMute() : QwenGatewayClientEvent.inputUnmute())
     }
 
     func notifyPlaybackStarted(responseId: String?) {
-        send(QwenGatewayClientEvent.playbackStarted(responseId: responseId))
+        sendControl(QwenGatewayClientEvent.playbackStarted(responseId: responseId))
     }
 
     func notifyPlaybackEnded(responseId: String?) {
-        send(QwenGatewayClientEvent.playbackEnded(responseId: responseId))
+        sendControl(QwenGatewayClientEvent.playbackEnded(responseId: responseId))
     }
 
-    func notifyPlaybackCancelled(responseId: String?) {
-        send(QwenGatewayClientEvent.playbackCancelled(responseId: responseId))
+    func notifyPlaybackCancelled(responseId: String?, reason: String? = nil) {
+        sendControl(QwenGatewayClientEvent.playbackCancelled(
+            responseId: responseId,
+            reason: reason
+        ))
     }
 
     // MARK: - 权限审批（HTTP）
 
     /// 请求网关进入休眠（语音前端暂停，等待唤醒词或客户端 wake 事件）
     func requestSleep() {
-        send(QwenGatewayClientEvent.sleep())
+        sendControl(QwenGatewayClientEvent.sleep())
     }
 
     /// 请求网关唤醒（复用唤醒词检测之后的同一套重连与退避路径）
     func requestWake() {
-        send(QwenGatewayClientEvent.wake())
+        if case .sleeping = connectionState {
+            realtimeConnectionStatus.markWaking()
+            publishRealtimeConnectionStatus()
+        }
+        sendControl(QwenGatewayClientEvent.wake())
+    }
+
+    private func publishRealtimeConnectionStatus() {
+        let nextState = realtimeConnectionStatus.connectionState
+        if connectionState != nextState {
+            connectionState = nextState
+        }
     }
 
     /// 审批一个任务权限请求。成功后网关会回发 task.permission.resolved 事件。
@@ -452,13 +806,62 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
         send(payload, via: socket)
     }
 
-    private func send(_ payload: [String: Any], via socket: QwenGatewaySocket) {
+    private func sendControl(
+        _ payload: [String: Any],
+        timeout: TimeInterval? = nil
+    ) {
+        guard let socket else { return }
+        send(payload, via: socket, timeout: timeout)
+    }
+
+    private func send(
+        _ payload: [String: Any],
+        via socket: QwenGatewaySocket,
+        timeout: TimeInterval? = nil
+    ) {
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let text = String(data: data, encoding: .utf8)
         else {
             return
         }
-        socket.send(text) { _ in }
+        guard let timeout, timeout.isFinite, timeout > 0 else {
+            socket.send(text) { [weak self, weak socket] error in
+                guard let error else { return }
+                Task { @MainActor in
+                    guard let self,
+                          let socket,
+                          self.socket === socket,
+                          !self.isUserDisconnect else { return }
+                    self.handleConnectionFailure(error)
+                }
+            }
+            return
+        }
+
+        let settlement = QwenGatewaySendSettlement()
+        let timeoutNanoseconds = UInt64(
+            min(max(timeout, 0.001), 60) * 1_000_000_000
+        )
+        Task { @MainActor [weak self, weak socket] in
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            guard !Task.isCancelled,
+                  settlement.claim(),
+                  let self,
+                  let socket,
+                  self.socket === socket,
+                  !self.isUserDisconnect else { return }
+            self.handleConnectionFailure(URLError(.timedOut))
+        }
+        socket.send(text) { [weak self, weak socket] error in
+            guard settlement.claim(), let error else { return }
+            Task { @MainActor in
+                guard let self,
+                      let socket,
+                      self.socket === socket,
+                      !self.isUserDisconnect else { return }
+                self.handleConnectionFailure(error)
+            }
+        }
     }
 
     // MARK: - URL
@@ -477,11 +880,12 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
               !apiKey.isEmpty else {
             return nil
         }
+        let profile = QwenRealtimeModelCatalog.selected
         return QwenEmbeddedGatewayConfiguration(
             apiKey: apiKey,
             baseURL: endpoint.websocketURL,
-            model: QwenRealtimeModelCatalog.selected.id,
-            voice: UserDefaults.standard.string(forKey: "qwen_realtime_voice") ?? "longanqian"
+            model: profile.id,
+            voice: QwenRealtimeModelCatalog.voice(for: profile)
         )
     }
 
@@ -505,10 +909,18 @@ final class QwenGatewayService: ObservableObject, QwenPermissionResponding {
 // MARK: - URLSession 适配器
 
 private final class QwenURLSessionWebSocket: QwenGatewaySocket {
+    private let session: URLSession
     private let task: URLSessionWebSocketTask
 
     init(request: URLRequest) {
-        let session = URLSession(configuration: .default)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.urlCache = nil
+        configuration.networkServiceType = .responsiveData
+        configuration.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: configuration)
+        self.session = session
         task = session.webSocketTask(with: request)
         task.resume()
     }
@@ -535,30 +947,67 @@ private final class QwenURLSessionWebSocket: QwenGatewaySocket {
         }
     }
 
+    func sendPing(completion: @escaping (Error?) -> Void) {
+        task.sendPing(pongReceiveHandler: completion)
+    }
+
     func close() {
         task.cancel(with: .normalClosure, reason: nil)
+        session.finishTasksAndInvalidate()
     }
 }
 
 // MARK: - 内置 DashScope Realtime 适配器
 
 /// 把 App 既有的 qwen-audio-agent 客户端事件转换为 DashScope Realtime 事件，
-/// 再把提供方事件转换回 QwenGatewayEvent JSON。这样上层语音会话无需知道连接
-/// 来源，外部网关协议也保持完全兼容。
-final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
+/// 再把提供方事件转换为统一的 QwenGatewayEvent。内置服务直接消费强类型事件，
+/// 原有 JSON 接口继续供协议兼容与测试使用。
+final class QwenEmbeddedGatewaySocket: QwenGatewaySocket, QwenGatewayDecodedEventSocket {
+    private static let responseWatchdogQueue = DispatchQueue(
+        label: "com.lunflux.hyper-meta-ai.qwen.response-start-watchdog",
+        qos: .userInitiated
+    )
+    private static let officialResponseStartTimeout: TimeInterval = 30
+
+    private struct DeferredClientEvent {
+        let payload: [String: Any]
+        let completion: ((Error?) -> Void)?
+        let enqueuedAt: TimeInterval
+        let maximumAge: TimeInterval?
+    }
+
+    private struct GatewayMessage {
+        let payload: [String: Any]
+        let event: QwenGatewayEvent
+    }
+
     private let providerSocket: QwenGatewaySocket
     private let configuration: QwenEmbeddedGatewayConfiguration
+    private let now: () -> TimeInterval
+    private let responseStartTimeout: TimeInterval
     private let lock = NSLock()
-    private var receiveWaiters: [(Result<String, Error>) -> Void] = []
-    private var queuedMessages: [Result<String, Error>] = []
-    private var deferredClientEvents: [[String: Any]] = []
+    private var receiveWaiters: [(Result<GatewayMessage, Error>) -> Void] = []
+    private var queuedMessages: [Result<GatewayMessage, Error>] = []
+    private var deferredClientEvents: [DeferredClientEvent] = []
     private var connectPayload: [String: Any] = [:]
     private var isConfigured = false
     private var hasConnectPayload = false
     private var providerSessionCreated = false
     private var isClosed = false
     private var inputMuted = false
+    private var isSleeping = false
     private var pendingTextItemIDs = Set<String>()
+    private var activeProviderResponseID: String?
+    private var responseStartWatchdog: DispatchWorkItem?
+    private var responseStartWatchdogGeneration: UInt64 = 0
+    /// 助手音频所在的 conversation item，用于打断时定位 `conversation.item.truncate`。
+    /// 由 `response.audio.delta` 携带的 `item_id`/`content_index` 记录。
+    private var activeAssistantAudioItemID: String?
+    private var activeAssistantAudioContentIndex = 0
+
+    private var modelProfile: QwenRealtimeModelProfile {
+        QwenRealtimeModelCatalog.resolve(configuration.model)
+    }
 
     convenience init(configuration: QwenEmbeddedGatewayConfiguration) {
         let endpoint = Self.realtimeURL(baseURL: configuration.baseURL, model: configuration.model)
@@ -572,10 +1021,16 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
 
     init(
         configuration: QwenEmbeddedGatewayConfiguration,
-        providerSocket: QwenGatewaySocket
+        providerSocket: QwenGatewaySocket,
+        now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        responseStartTimeout: TimeInterval = QwenEmbeddedGatewaySocket.officialResponseStartTimeout
     ) {
         self.configuration = configuration
         self.providerSocket = providerSocket
+        self.now = now
+        self.responseStartTimeout = responseStartTimeout.isFinite
+            ? max(0, responseStartTimeout)
+            : Self.officialResponseStartTimeout
         receiveProviderMessage()
     }
 
@@ -584,6 +1039,13 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
               let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = payload["type"] as? String else {
             completion(QwenGatewayError.invalidMessage)
+            return
+        }
+        lock.lock()
+        let closed = isClosed
+        lock.unlock()
+        guard !closed else {
+            completion(URLError(.networkConnectionLost))
             return
         }
 
@@ -599,13 +1061,28 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
             if configured { flushDeferredClientEvents() }
         case "audio.append":
             lock.lock()
-            let acceptsInput = !inputMuted
+            let acceptsInput = !inputMuted && !isSleeping
             lock.unlock()
             guard acceptsInput, let audio = payload["audio"] as? String else {
                 completion(nil)
                 return
             }
-            enqueueOrSend(["type": "input_audio_buffer.append", "audio": audio])
+            enqueueOrSend(
+                ["type": "input_audio_buffer.append", "audio": audio],
+                completion: completion,
+                maximumAge: RealtimeProviderAudioProfiles.qwen.maximumQueuedInputAge
+            )
+            return
+        case "image.append":
+            // The embedded DashScope transport supports the model's native image
+            // capability; the external qwen-audio-agent transport remains text/audio-only.
+            guard modelProfile.supportsImageInput,
+                  let image = payload["image"] as? String,
+                  !image.isEmpty else {
+                completion(nil)
+                return
+            }
+            enqueueOrSend(["type": "input_image_buffer.append", "image": image])
         case "text.message":
             guard let text = payload["text"] as? String, !text.isEmpty else {
                 completion(nil)
@@ -629,19 +1106,70 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
         case "input.unmute":
             lock.lock(); inputMuted = false; lock.unlock()
         case "interrupt":
-            enqueueOrSend(["type": "response.cancel"])
-            emit(["type": "playback.clear", "reason": "client_interrupt"])
-            emit(["type": "response.interrupted"])
+            let responseID = currentProviderResponseID()
+            let audioItem = currentAssistantAudioItem()
+            lock.lock()
+            let configured = isConfigured
+            lock.unlock()
+            let playbackClear: [String: Any] = [
+                "type": "playback.clear",
+                "reason": "client_interrupt"
+            ]
+            emit(playbackClear)
+            var responseInterrupted: [String: Any] = ["type": "response.interrupted"]
+            if let responseID {
+                responseInterrupted["responseId"] = responseID
+            }
+            emit(responseInterrupted)
+            clearProviderResponseID(responseID)
+            clearAssistantAudioItem()
+            guard configured else {
+                completion(nil)
+                return
+            }
+            // 先截断再取消：告诉服务端用户实际只听到了 playedMs 毫秒，
+            // 否则模型上下文会保留用户从未听到的那段回复，导致后续对话
+            // 基于"它以为自己说过的话"推理。截断必须在 cancel 之前发出，
+            // 因为 cancel 之后该 item 就不再接受截断了。
+            if let audioItem, let playedMs = payload["playedMs"] as? Int, playedMs >= 0 {
+                sendProvider([
+                    "type": "conversation.item.truncate",
+                    "item_id": audioItem.itemID,
+                    "content_index": audioItem.contentIndex,
+                    "audio_end_ms": playedMs
+                ]) { _ in }
+            }
+            sendProvider(["type": "response.cancel"], completion: completion)
+            return
         case "sleep":
+            lock.lock()
+            isSleeping = true
+            activeProviderResponseID = nil
+            activeAssistantAudioItemID = nil
+            activeAssistantAudioContentIndex = 0
+            lock.unlock()
             enqueueOrSend(["type": "response.cancel"])
             emit(["type": "client.state", "state": "sleeping"])
+            emit(["type": "voice.connection", "state": "sleeping"])
+            emit(["type": "voice.sleep", "state": "sleeping"])
             emit(["type": "voice.state", "state": "idle"])
         case "wake":
-            emit(["type": "client.state", "state": "awake"])
+            lock.lock()
+            isSleeping = false
+            let configured = isConfigured
+            lock.unlock()
+            emit(["type": "voice.sleep", "state": "detected"])
+            emit(["type": "voice.connection", "state": "connecting"])
+            if configured {
+                emit(["type": "voice.connection", "state": "connected"])
+                emit(["type": "voice.ready", "inputSampleRate": modelProfile.inputSampleRate])
+                emit(["type": "voice.sleep", "state": "awake"])
+            }
             emit(["type": "voice.state", "state": "listening"])
-        case "playback.started", "playback.ended", "playback.cancelled":
-            // DashScope 不需要客户端播放回执。
-            break
+        case "playback.started":
+            _ = rememberProviderResponseID(payload["responseId"] as? String)
+        case "playback.ended", "playback.cancelled":
+            clearProviderResponseID(Self.normalizedResponseID(payload["responseId"] as? String))
         default:
             break
         }
@@ -649,6 +1177,30 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
     }
 
     func receive(completion: @escaping (Result<String, Error>) -> Void) {
+        receiveMessage { result in
+            switch result {
+            case .success(let message):
+                guard let data = try? JSONSerialization.data(withJSONObject: message.payload),
+                      let text = String(data: data, encoding: .utf8) else {
+                    completion(.failure(QwenGatewayError.invalidMessage))
+                    return
+                }
+                completion(.success(text))
+            case .failure(let error):
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func receiveEvent(completion: @escaping (Result<QwenGatewayEvent, Error>) -> Void) {
+        receiveMessage { result in
+            completion(result.map(\.event))
+        }
+    }
+
+    private func receiveMessage(
+        completion: @escaping (Result<GatewayMessage, Error>) -> Void
+    ) {
         lock.lock()
         if !queuedMessages.isEmpty {
             let message = queuedMessages.removeFirst()
@@ -665,18 +1217,29 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
         lock.unlock()
     }
 
+    func sendPing(completion: @escaping (Error?) -> Void) {
+        providerSocket.sendPing(completion: completion)
+    }
+
     func close() {
+        cancelResponseStartWatchdog()
         lock.lock()
         guard !isClosed else {
             lock.unlock()
             return
         }
         isClosed = true
+        activeProviderResponseID = nil
+        activeAssistantAudioItemID = nil
+        activeAssistantAudioContentIndex = 0
         let waiters = receiveWaiters
         receiveWaiters.removeAll()
+        let deferred = deferredClientEvents
+        deferredClientEvents.removeAll()
         lock.unlock()
         providerSocket.close()
         waiters.forEach { $0(.failure(URLError(.cancelled))) }
+        deferred.forEach { $0.completion?(URLError(.cancelled)) }
     }
 
     private func receiveProviderMessage() {
@@ -693,16 +1256,23 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
     }
 
     private func closeWith(error: Error) {
+        cancelResponseStartWatchdog()
         lock.lock()
         if isClosed {
             lock.unlock()
             return
         }
         isClosed = true
+        activeProviderResponseID = nil
+        activeAssistantAudioItemID = nil
+        activeAssistantAudioContentIndex = 0
         let waiters = receiveWaiters
         receiveWaiters.removeAll()
+        let deferred = deferredClientEvents
+        deferredClientEvents.removeAll()
         lock.unlock()
         waiters.forEach { $0(.failure(error)) }
+        deferred.forEach { $0.completion?(error) }
     }
 
     private func handleProviderMessage(_ text: String) {
@@ -721,8 +1291,13 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
             return
         }
         if type == "session.updated" {
-            lock.lock(); isConfigured = true; lock.unlock()
-            emit(["type": "voice.ready", "inputSampleRate": 16_000])
+            lock.lock()
+            isConfigured = true
+            activeProviderResponseID = nil
+            activeAssistantAudioItemID = nil
+            activeAssistantAudioContentIndex = 0
+            lock.unlock()
+            emit(["type": "voice.ready", "inputSampleRate": modelProfile.inputSampleRate])
             emit(["type": "voice.connection", "state": "connected"])
             flushDeferredClientEvents()
             return
@@ -731,17 +1306,41 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
         if type == "conversation.item.created",
            let itemID = (json["item"] as? [String: Any])?["id"] as? String {
             lock.lock()
-            let needsResponse = pendingTextItemIDs.remove(itemID) != nil
+            var needsResponse = pendingTextItemIDs.remove(itemID) != nil
+            // Qwen3.5 Omni may replace the client item ID. Upstream v1.9+
+            // acknowledges the sole pending item in that case.
+            if !needsResponse,
+               modelProfile.family == .omni,
+               pendingTextItemIDs.count == 1,
+               let pendingID = pendingTextItemIDs.first {
+                pendingTextItemIDs.remove(pendingID)
+                needsResponse = true
+            }
             lock.unlock()
             if needsResponse { sendProvider(["type": "response.create"]) }
             return
+        }
+
+        if type.hasPrefix("response.")
+            || type == "error"
+            || type == "conversation.item.input_audio_transcription.failed"
+            || type == "input_audio_buffer.speech_started" {
+            cancelResponseStartWatchdog()
         }
 
         switch type {
         case "input_audio_buffer.speech_started":
             emit(["type": "turn.started", "turnId": json["item_id"] as? String ?? ""])
             emit(["type": "voice.state", "state": "listening"])
-        case "input_audio_buffer.speech_stopped", "input_audio_buffer.committed":
+        case "input_audio_buffer.speech_stopped":
+            if json["reason"] as? String == "turn_invalid" {
+                emit(["type": "transcript.discard"])
+                emit(["type": "voice.state", "state": "idle"])
+                return
+            }
+            emit(["type": "voice.state", "state": "thinking"])
+            scheduleResponseStartWatchdog()
+        case "input_audio_buffer.committed":
             emit(["type": "voice.state", "state": "thinking"])
         case "conversation.item.input_audio_transcription.delta",
              "conversation.item.input_audio_transcription.text":
@@ -753,21 +1352,30 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
                 "role": "user",
                 "content": json["transcript"] as? String ?? ""
             ])
+        case "conversation.item.input_audio_transcription.failed":
+            emit(["type": "transcript.discard"])
+            emit(["type": "voice.state", "state": "idle"])
         case "response.created":
             if !outputIsEnabled {
                 // 听写转发模式仍需让提供方完成 ASR；只抑制音频/助手文本事件，
                 // 不取消响应，避免与 Smart Turn 的自动响应产生竞态。
                 return
             }
-            emit(["type": "response.started", "responseId": Self.responseID(from: json)])
+            let responseID = rememberProviderResponseID(from: json)
+            emit(["type": "response.started", "responseId": responseID ?? ""])
         case "response.audio.delta", "response.output_audio.delta":
             guard outputIsEnabled else { return }
-            emit([
+            let responseID = providerResponseID(for: json)
+            rememberAssistantAudioItem(from: json)
+            var audioDelta: [String: Any] = [
                 "type": "audio.delta",
                 "audio": json["delta"] as? String ?? "",
-                "sampleRate": 24_000,
-                "responseId": Self.responseID(from: json)
-            ])
+                "sampleRate": modelProfile.outputSampleRate
+            ]
+            if let responseID {
+                audioDelta["responseId"] = responseID
+            }
+            emit(audioDelta)
         case "response.audio_transcript.delta", "response.output_audio_transcript.delta",
              "response.text.delta":
             guard outputIsEnabled else { return }
@@ -788,11 +1396,26 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
             ])
         case "response.audio.done", "response.output_audio.done":
             guard outputIsEnabled else { return }
-            emit(["type": "audio.done", "responseId": Self.responseID(from: json)])
+            let responseID = providerResponseID(for: json)
+            var audioDone: [String: Any] = ["type": "audio.done"]
+            if let responseID {
+                audioDone["responseId"] = responseID
+            }
+            emit(audioDone)
         case "response.done":
-            guard outputIsEnabled else { return }
-            emit(["type": "audio.done", "responseId": Self.responseID(from: json)])
+            let responseID = providerResponseID(for: json)
+            clearAssistantAudioItem()
+            if outputIsEnabled {
+                var audioDone: [String: Any] = ["type": "audio.done"]
+                if let responseID {
+                    audioDone["responseId"] = responseID
+                }
+                emit(audioDone)
+            }
             emit(["type": "voice.state", "state": "idle"])
+            if let failure = Self.responseFailureMessage(json) {
+                emit(["type": "error", "message": failure])
+            }
         case "error":
             let error = json["error"] as? [String: Any]
             emit(["type": "error", "message": error?["message"] as? String ?? "Realtime provider error"])
@@ -801,33 +1424,118 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
         }
     }
 
+    /// Mirrors qwen-audio-agent's response-start watchdog: a valid speech turn
+    /// must produce response activity within 30 seconds or the provider socket
+    /// is recycled instead of leaving the client in an endless listening state.
+    private func scheduleResponseStartWatchdog() {
+        guard responseStartTimeout > 0 else { return }
+
+        lock.lock()
+        responseStartWatchdog?.cancel()
+        responseStartWatchdogGeneration &+= 1
+        let generation = responseStartWatchdogGeneration
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.responseStartTimedOut(generation: generation)
+        }
+        responseStartWatchdog = workItem
+        lock.unlock()
+
+        Self.responseWatchdogQueue.asyncAfter(
+            deadline: .now() + responseStartTimeout,
+            execute: workItem
+        )
+    }
+
+    private func cancelResponseStartWatchdog() {
+        lock.lock()
+        responseStartWatchdogGeneration &+= 1
+        let workItem = responseStartWatchdog
+        responseStartWatchdog = nil
+        lock.unlock()
+        workItem?.cancel()
+    }
+
+    private func responseStartTimedOut(generation: UInt64) {
+        lock.lock()
+        guard !isClosed,
+              responseStartWatchdogGeneration == generation,
+              responseStartWatchdog != nil else {
+            lock.unlock()
+            return
+        }
+        responseStartWatchdog = nil
+        lock.unlock()
+
+        emit([
+            "type": "error",
+            "message": "qwen.error.response.start.timeout".localized
+        ])
+        emit(["type": "voice.state", "state": "idle"])
+        providerSocket.close()
+        closeWith(error: URLError(.timedOut))
+    }
+
+    private static func responseFailureMessage(_ json: [String: Any]) -> String? {
+        guard let response = json["response"] as? [String: Any],
+              let status = response["status"] as? String,
+              ["failed", "incomplete"].contains(status) else {
+            return nil
+        }
+        let details = response["status_details"] as? [String: Any]
+        let error = details?["error"] as? [String: Any]
+        return error?["message"] as? String
+            ?? details?["reason"] as? String
+            ?? "Realtime response \(status)."
+    }
+
     private func sendSessionUpdate() {
         lock.lock()
         let payload = connectPayload
         lock.unlock()
         let outputEnabled = payload["outputEnabled"] as? Bool ?? true
         let inputEnabled = payload["inputEnabled"] as? Bool ?? true
+        let profile = modelProfile
+        let configuredVoice = configuration.voice.trimmingCharacters(in: .whitespacesAndNewlines)
         var session: [String: Any] = [
             "modalities": outputEnabled ? ["text", "audio"] : ["text"],
-            "voice": configuration.voice,
+            "voice": configuredVoice.isEmpty ? profile.defaultVoice : configuredVoice,
             "input_audio_format": "pcm",
             "output_audio_format": "pcm"
         ]
-        session["turn_detection"] = inputEnabled ? ["type": "smart_turn"] : NSNull()
+        session["turn_detection"] = inputEnabled
+            ? ["type": profile.turnDetectionType]
+            : NSNull()
         if let instructions = AgentSystemPromptBuilder.build(), !instructions.isEmpty {
             session["instructions"] = instructions
         }
         sendProvider(["type": "session.update", "session": session])
     }
 
-    private func enqueueOrSend(_ event: [String: Any]) {
+    private func enqueueOrSend(
+        _ event: [String: Any],
+        completion: ((Error?) -> Void)? = nil,
+        maximumAge: TimeInterval? = nil
+    ) {
+        let enqueuedAt = now()
         lock.lock()
+        guard !isClosed else {
+            lock.unlock()
+            completion?(URLError(.networkConnectionLost))
+            return
+        }
         let configured = isConfigured
         if !configured {
-            deferredClientEvents.append(event)
+            deferredClientEvents.append(
+                DeferredClientEvent(
+                    payload: event,
+                    completion: completion,
+                    enqueuedAt: enqueuedAt,
+                    maximumAge: maximumAge
+                )
+            )
         }
         lock.unlock()
-        if configured { sendProvider(event) }
+        if configured { sendProvider(event, completion: completion) }
     }
 
     private func flushDeferredClientEvents() {
@@ -839,25 +1547,45 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
         let events = deferredClientEvents
         deferredClientEvents.removeAll()
         lock.unlock()
-        events.forEach(sendProvider)
+        let flushedAt = now()
+        events.forEach { event in
+            if let maximumAge = event.maximumAge {
+                let age = flushedAt - event.enqueuedAt
+                if !age.isFinite || age > maximumAge {
+                    event.completion?(URLError(.timedOut))
+                    return
+                }
+            }
+            sendProvider(event.payload, completion: event.completion)
+        }
     }
 
-    private func sendProvider(_ event: [String: Any]) {
+    private func sendProvider(
+        _ event: [String: Any],
+        completion: ((Error?) -> Void)? = nil
+    ) {
         guard let data = try? JSONSerialization.data(withJSONObject: event),
-              let text = String(data: data, encoding: .utf8) else { return }
-        providerSocket.send(text) { _ in }
+              let text = String(data: data, encoding: .utf8) else {
+            completion?(QwenGatewayError.invalidMessage)
+            return
+        }
+        providerSocket.send(text) { error in
+            completion?(error)
+        }
     }
 
     private func emit(_ event: [String: Any]) {
-        guard let data = try? JSONSerialization.data(withJSONObject: event),
-              let text = String(data: data, encoding: .utf8) else { return }
+        guard let decodedEvent = QwenGatewayEventParser.parse(event, receivedAt: now()) else {
+            return
+        }
+        let message = GatewayMessage(payload: event, event: decodedEvent)
         lock.lock()
         if let waiter = receiveWaiters.first {
             receiveWaiters.removeFirst()
             lock.unlock()
-            waiter(.success(text))
+            waiter(.success(message))
         } else {
-            queuedMessages.append(.success(text))
+            queuedMessages.append(.success(message))
             lock.unlock()
         }
     }
@@ -873,6 +1601,65 @@ final class QwenEmbeddedGatewaySocket: QwenGatewaySocket {
             ?? (json["response"] as? [String: Any])?["id"] as? String
             ?? json["id"] as? String
             ?? ""
+    }
+
+    private static func normalizedResponseID(_ responseID: String?) -> String? {
+        let value = responseID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
+
+    private func rememberProviderResponseID(_ responseID: String?) -> String? {
+        guard let value = Self.normalizedResponseID(responseID) else { return nil }
+        lock.lock()
+        activeProviderResponseID = value
+        lock.unlock()
+        return value
+    }
+
+    private func rememberProviderResponseID(from json: [String: Any]) -> String? {
+        rememberProviderResponseID(Self.responseID(from: json))
+    }
+
+    private func currentProviderResponseID() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return activeProviderResponseID
+    }
+
+    private func providerResponseID(for json: [String: Any]) -> String? {
+        rememberProviderResponseID(from: json) ?? currentProviderResponseID()
+    }
+
+    private func clearProviderResponseID(_ responseID: String?) {
+        lock.lock()
+        if responseID == nil || activeProviderResponseID == responseID {
+            activeProviderResponseID = nil
+        }
+        lock.unlock()
+    }
+
+    /// 记录当前助手音频所属的 conversation item，供打断时截断使用。
+    private func rememberAssistantAudioItem(from json: [String: Any]) {
+        guard let itemID = Self.normalizedResponseID(json["item_id"] as? String) else { return }
+        let contentIndex = json["content_index"] as? Int ?? 0
+        lock.lock()
+        activeAssistantAudioItemID = itemID
+        activeAssistantAudioContentIndex = contentIndex
+        lock.unlock()
+    }
+
+    private func currentAssistantAudioItem() -> (itemID: String, contentIndex: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let itemID = activeAssistantAudioItemID else { return nil }
+        return (itemID, activeAssistantAudioContentIndex)
+    }
+
+    private func clearAssistantAudioItem() {
+        lock.lock()
+        activeAssistantAudioItemID = nil
+        activeAssistantAudioContentIndex = 0
+        lock.unlock()
     }
 
     private var outputIsEnabled: Bool {

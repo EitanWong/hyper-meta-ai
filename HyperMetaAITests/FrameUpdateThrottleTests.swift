@@ -533,6 +533,14 @@ final class RealtimeProviderAudioProfileTests: XCTestCase {
     XCTAssertEqual(profile.outputFormat, .realtimePCM16Mono24kHz)
   }
 
+  func testQwenProfileBoundsUploadTailLatency() {
+    let profile = RealtimeProviderAudioProfiles.qwen
+
+    XCTAssertEqual(profile.uploadSendTimeout, 0.25)
+    XCTAssertEqual(profile.maximumQueuedInputAge, 0.12)
+    XCTAssertEqual(profile.criticalControlSendTimeout, 0.15)
+  }
+
   func testOmniSessionConfigurationUsesTheQwenPCMContract() throws {
     let event = OmniRealtimeService.makeSessionConfiguration(
       eventID: "test-event",
@@ -546,6 +554,24 @@ final class RealtimeProviderAudioProfileTests: XCTestCase {
     XCTAssertEqual(session["input_audio_format"] as? String, "pcm")
     XCTAssertEqual(session["output_audio_format"] as? String, "pcm")
     XCTAssertEqual(session["modalities"] as? [String], ["text", "audio"])
+  }
+}
+
+final class TTSOutputLevelTests: XCTestCase {
+  func testMixerRMSIsNormalizedForOrbFeedback() throws {
+    let format = try XCTUnwrap(
+      AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)
+    )
+    let buffer = try XCTUnwrap(
+      AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128)
+    )
+    buffer.frameLength = 128
+    let samples = try XCTUnwrap(buffer.floatChannelData?[0])
+    for index in 0..<128 {
+      samples[index] = 0.0625
+    }
+
+    XCTAssertEqual(TTSService.normalizedAudioLevel(buffer), 0.5, accuracy: 0.01)
   }
 }
 
@@ -673,6 +699,9 @@ final class LatestFrameMailboxTests: XCTestCase {
 }
 
 final class RealtimeAudioCaptureMailboxTests: XCTestCase {
+  private static let interactiveUploadBudgetMilliseconds = 20.0
+  private static let resamplingBudgetMillisecondsPerFrame = 0.35
+
   func testPCM16EncoderMapsFloatSamplesWithoutResampling() throws {
     let encoder = PCM16AudioEncoder(targetSampleRate: nil)
     let frame = RealtimeAudioCapturedFrame(
@@ -689,6 +718,424 @@ final class RealtimeAudioCaptureMailboxTests: XCTestCase {
     }
 
     XCTAssertEqual(samples, [-32_767, 0, 16_383, 32_767])
+    XCTAssertEqual(encoder.allocatedAudioBufferCount, 0)
+  }
+
+  func testEncoderCalculatesRMSWhileWritingPCM16() throws {
+    let encoder = PCM16AudioEncoder(targetSampleRate: nil)
+    let frame = RealtimeAudioCapturedFrame(
+      samples: [-1, -0.5, 0, 0.25, 0.75, 1],
+      sampleRate: 16_000,
+      sourceChannelCount: 1,
+      generation: 1,
+      capturedAt: 0
+    )
+
+    let encoded = try XCTUnwrap(encoder.encode(frame, includeStats: true))
+    XCTAssertEqual(
+      encoded.stats,
+      RealtimePCM16AudioMeter.stats(for: encoded.data)
+    )
+  }
+
+  func testUploadPipelineUsesInjectedBackgroundSenderAndReportsAudioStats() throws {
+    let pipeline = RealtimeAudioUploadPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.injected-audio-sender",
+      targetSampleRate: 16_000,
+      slotCount: 2,
+      maximumFramesPerBuffer: 16
+    )
+    let format = try makeFormat(sampleRate: 48_000)
+    let sent = expectation(description: "audio message sent")
+    let analyzed = expectation(description: "audio frame analyzed")
+    let firstAudio = expectation(description: "first audio callback")
+
+    pipeline.start(
+      generation: 5,
+      inputFormat: format,
+      messageBuilder: { .string($0.base64EncodedString()) },
+      messageSender: { message, completion in
+        XCTAssertFalse(Thread.isMainThread)
+        guard case .string(let text) = message else {
+          return XCTFail("expected a text WebSocket message")
+        }
+        XCTAssertFalse(text.isEmpty)
+        sent.fulfill()
+        completion(nil)
+      },
+      onEncodedAudio: { stats in
+        XCTAssertEqual(stats.sampleCount, 4)
+        XCTAssertGreaterThan(stats.rms, 0)
+        analyzed.fulfill()
+      },
+      onFirstAudioSent: {
+        firstAudio.fulfill()
+      },
+      onFailure: { message in
+        XCTFail("unexpected upload failure: \(message)")
+      }
+    )
+
+    pipeline.capture(
+      try makeBuffer(samples: [0.25, -0.25, 0.5, -0.5], sampleRate: 16_000),
+      generation: 5
+    )
+
+    wait(for: [sent, analyzed, firstAudio], timeout: 2)
+    let metrics = pipeline.snapshot()
+    XCTAssertEqual(metrics.sentBuffers, 1)
+    pipeline.stop()
+  }
+
+  func testCapturedAudioFeedbackBypassesBlockedSend() throws {
+    let pipeline = RealtimeAudioUploadPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.capture-side-audio-feedback",
+      targetSampleRate: 16_000,
+      slotCount: 3,
+      maximumFramesPerBuffer: 1_024,
+      sendTimeout: 1
+    )
+    defer { pipeline.stop() }
+    let format = try makeFormat(sampleRate: 48_000)
+    let firstSendStarted = expectation(description: "first send is blocked")
+    let firstCaptured = expectation(description: "first frame reaches capture feedback")
+    let secondCaptured = expectation(description: "second frame bypasses blocked send")
+    let secondSendStarted = expectation(description: "second frame sends after release")
+    let firstAudio = expectation(description: "first send completion reaches main actor")
+    var blockedCompletion: ((Error?) -> Void)?
+    var sendCount = 0
+    let feedbackProbe = RealtimeCaptureFeedbackProbe()
+
+    pipeline.start(
+      generation: 1,
+      inputFormat: format,
+      messageBuilder: { .data($0) },
+      messageSender: { _, completion in
+        sendCount += 1
+        if sendCount == 1 {
+          blockedCompletion = completion
+          firstSendStarted.fulfill()
+        } else {
+          secondSendStarted.fulfill()
+          completion(nil)
+        }
+      },
+      onCapturedAudio: { stats in
+        XCTAssertEqual(stats.sampleCount, 960)
+        XCTAssertEqual(stats.sampleRate, 48_000)
+        XCTAssertEqual(stats.duration, 0.02, accuracy: 0.000_001)
+        XCTAssertGreaterThan(stats.rms, 0)
+        let feedback = feedbackProbe.record(at: ProcessInfo.processInfo.systemUptime)
+        if feedback.index == 1 {
+          firstCaptured.fulfill()
+        } else if feedback.index == 2 {
+          secondCaptured.fulfill()
+        }
+      },
+      onFirstAudioSent: {
+        firstAudio.fulfill()
+      },
+      onFailure: { message in
+        XCTFail("unexpected upload failure: \(message)")
+      }
+    )
+
+    let samples = (0..<960).map { index in
+      index.isMultiple(of: 2) ? Float(0.25) : Float(-0.25)
+    }
+    let buffer = try makeBuffer(samples: samples, sampleRate: 48_000)
+    pipeline.capture(buffer, generation: 1)
+    wait(for: [firstSendStarted, firstCaptured], timeout: 1)
+
+    feedbackProbe.markSecondCapture(at: ProcessInfo.processInfo.systemUptime)
+    pipeline.capture(buffer, generation: 1)
+    wait(for: [secondCaptured], timeout: 1)
+    let blockedMetrics = pipeline.snapshot()
+    XCTAssertEqual(blockedMetrics.encodedBuffers, 1)
+    XCTAssertEqual(blockedMetrics.sentBuffers, 0)
+
+    blockedCompletion?(nil)
+    wait(for: [firstAudio, secondSendStarted], timeout: 1)
+
+    let secondCaptureFeedbackMilliseconds = feedbackProbe.secondFeedbackMilliseconds
+    let attachment = XCTAttachment(
+      string: "captureSideDetectionDelayMs=\(secondCaptureFeedbackMilliseconds)"
+    )
+    attachment.name = "Realtime capture-side detection under blocked send"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertLessThan(secondCaptureFeedbackMilliseconds, 10)
+  }
+
+  func testImmediateFirstCaptureIsNeverLostToAnEmptyStartupDrain() throws {
+    let pipeline = RealtimeAudioUploadPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.immediate-first-capture",
+      targetSampleRate: 16_000,
+      slotCount: 2,
+      maximumFramesPerBuffer: 16
+    )
+    let format = try makeFormat(sampleRate: 16_000)
+    let buffer = try makeBuffer(samples: [0.25, -0.25, 0.5, -0.5], sampleRate: 16_000)
+
+    for generation in 1...50 {
+      let sent = expectation(description: "generation \(generation) first frame sent")
+      pipeline.start(
+        generation: generation,
+        inputFormat: format,
+        messageBuilder: { .data($0) },
+        messageSender: { _, completion in
+          sent.fulfill()
+          completion(nil)
+        },
+        onFirstAudioSent: {},
+        onFailure: { message in
+          XCTFail("unexpected upload failure: \(message)")
+        }
+      )
+      pipeline.capture(buffer, generation: generation)
+      wait(for: [sent], timeout: 0.5)
+    }
+    pipeline.stop()
+  }
+
+  func testFirstCapturedFrameReachesSenderWithinInteractiveLatencyBudget() throws {
+    let pipeline = RealtimeAudioUploadPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.first-audio-latency",
+      targetSampleRate: 16_000,
+      slotCount: 2,
+      maximumFramesPerBuffer: 1_024
+    )
+    let format = try makeFormat(sampleRate: 48_000)
+    let sent = expectation(description: "first audio reached sender")
+    let firstAudio = expectation(description: "first audio completion reached main actor")
+    var senderLatencyMilliseconds = 0.0
+    let captureStartedAt = ProcessInfo.processInfo.systemUptime
+
+    pipeline.start(
+      generation: 1,
+      inputFormat: format,
+      messageBuilder: { .data($0) },
+      messageSender: { _, completion in
+        senderLatencyMilliseconds = (
+          ProcessInfo.processInfo.systemUptime - captureStartedAt
+        ) * 1_000
+        sent.fulfill()
+        completion(nil)
+      },
+      onFirstAudioSent: {
+        firstAudio.fulfill()
+      },
+      onFailure: { message in
+        XCTFail("unexpected upload failure: \(message)")
+      }
+    )
+    pipeline.capture(
+      try makeBuffer(
+        samples: (0..<960).map { sin(Float($0) * 0.05) * 0.25 },
+        sampleRate: 48_000
+      ),
+      generation: 1
+    )
+
+    wait(for: [sent, firstAudio], timeout: 2)
+    let metrics = pipeline.snapshot()
+    print(
+      "[RealtimeAudioLatency] firstSenderMs=\(senderLatencyMilliseconds) "
+        + "captureToSendMs=\(metrics.maximumCaptureToSendMilliseconds)"
+    )
+    let latencyAttachment = XCTAttachment(
+      string: "firstSenderMs=\(senderLatencyMilliseconds)\n"
+        + "captureToSendMs=\(metrics.maximumCaptureToSendMilliseconds)"
+    )
+    latencyAttachment.name = "Realtime first-frame upload latency"
+    latencyAttachment.lifetime = .keepAlways
+    add(latencyAttachment)
+    XCTAssertLessThan(
+      senderLatencyMilliseconds,
+      Self.interactiveUploadBudgetMilliseconds
+    )
+    XCTAssertLessThan(
+      metrics.maximumCaptureToSendMilliseconds,
+      Self.interactiveUploadBudgetMilliseconds
+    )
+    pipeline.stop()
+  }
+
+  func testUploadPipelineDropsQueuedFramesThatExpireBehindABlockedSend() throws {
+    let pipeline = RealtimeAudioUploadPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.stale-audio-drop",
+      targetSampleRate: 16_000,
+      slotCount: 2,
+      maximumFramesPerBuffer: 16,
+      maximumQueuedFrameAge: 0.12
+    )
+    let format = try makeFormat(sampleRate: 16_000)
+    let firstSendStarted = expectation(description: "first send is in flight")
+    let firstAudio = expectation(description: "first send completes")
+    let staleFrameSent = expectation(description: "stale queued audio must not be sent")
+    staleFrameSent.isInverted = true
+    var blockedCompletion: ((Error?) -> Void)?
+    var sendCount = 0
+
+    pipeline.start(
+      generation: 1,
+      inputFormat: format,
+      messageBuilder: { .data($0) },
+      messageSender: { _, completion in
+        sendCount += 1
+        if sendCount == 1 {
+          blockedCompletion = completion
+          firstSendStarted.fulfill()
+        } else {
+          staleFrameSent.fulfill()
+          completion(nil)
+        }
+      },
+      onFirstAudioSent: {
+        firstAudio.fulfill()
+      },
+      onFailure: { message in
+        XCTFail("stale audio should be dropped without failing the session: \(message)")
+      }
+    )
+    pipeline.capture(
+      try makeBuffer(samples: [0.1, -0.1, 0.2, -0.2], sampleRate: 16_000),
+      generation: 1
+    )
+    wait(for: [firstSendStarted], timeout: 1)
+    pipeline.capture(
+      try makeBuffer(samples: [0.25, -0.25, 0.5, -0.5], sampleRate: 16_000),
+      generation: 1,
+      capturedAt: ProcessInfo.processInfo.systemUptime - 1
+    )
+    blockedCompletion?(nil)
+
+    wait(for: [firstAudio, staleFrameSent], timeout: 0.2)
+    let metrics = pipeline.snapshot()
+    XCTAssertEqual(metrics.staleFrameAgeDrops, 1)
+    XCTAssertEqual(metrics.encodedBuffers, 1)
+    XCTAssertEqual(metrics.sentBuffers, 1)
+    XCTAssertEqual(metrics.currentQueueDepth, 0)
+    pipeline.stop()
+  }
+
+  func testUploadTimeoutIsBoundedAndLateCompletionCannotPoisonTheNextGeneration() throws {
+    let pipeline = RealtimeAudioUploadPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.audio-send-timeout",
+      targetSampleRate: 16_000,
+      slotCount: 2,
+      maximumFramesPerBuffer: 16,
+      sendTimeout: 0.04,
+      maximumQueuedFrameAge: 0.12
+    )
+    let format = try makeFormat(sampleRate: 16_000)
+    let buffer = try makeBuffer(samples: [0.25, -0.25, 0.5, -0.5], sampleRate: 16_000)
+    let timedOut = expectation(description: "blocked send times out")
+    var blockedCompletion: ((Error?) -> Void)?
+    var timeoutMilliseconds = 0.0
+    let startedAt = ProcessInfo.processInfo.systemUptime
+
+    pipeline.start(
+      generation: 1,
+      inputFormat: format,
+      messageBuilder: { .data($0) },
+      messageSender: { _, completion in
+        blockedCompletion = completion
+      },
+      onFirstAudioSent: {
+        XCTFail("a timed-out send must not report first audio")
+      },
+      onFailure: { message in
+        timeoutMilliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+        XCTAssertEqual(message, "Audio send timed out")
+        timedOut.fulfill()
+      }
+    )
+    pipeline.capture(buffer, generation: 1)
+
+    wait(for: [timedOut], timeout: 1)
+    let timeoutMetrics = pipeline.snapshot()
+    print("[RealtimeAudioLatency] blockedSendTimeoutMs=\(timeoutMilliseconds)")
+    let timeoutAttachment = XCTAttachment(
+      string: "configuredSendTimeoutMs=40\nblockedSendTimeoutMs=\(timeoutMilliseconds)"
+    )
+    timeoutAttachment.name = "Realtime blocked-send timeout latency"
+    timeoutAttachment.lifetime = .keepAlways
+    add(timeoutAttachment)
+    XCTAssertEqual(timeoutMetrics.sendTimeouts, 1)
+    XCTAssertEqual(timeoutMetrics.sentBuffers, 0)
+    XCTAssertGreaterThanOrEqual(timeoutMilliseconds, 30)
+    XCTAssertLessThan(timeoutMilliseconds, 250)
+
+    let sentAfterRestart = expectation(description: "next generation sends audio")
+    let firstAudioAfterRestart = expectation(description: "next generation reports first audio")
+    pipeline.start(
+      generation: 2,
+      inputFormat: format,
+      messageBuilder: { .data($0) },
+      messageSender: { _, completion in
+        sentAfterRestart.fulfill()
+        completion(nil)
+      },
+      onFirstAudioSent: {
+        firstAudioAfterRestart.fulfill()
+      },
+      onFailure: { message in
+        XCTFail("unexpected second-generation failure: \(message)")
+      }
+    )
+    blockedCompletion?(nil)
+    pipeline.capture(buffer, generation: 2)
+
+    wait(for: [sentAfterRestart, firstAudioAfterRestart], timeout: 1)
+    let restartedMetrics = pipeline.snapshot()
+    XCTAssertEqual(restartedMetrics.sentBuffers, 1)
+    XCTAssertEqual(restartedMetrics.sendFailures, 0)
+    pipeline.stop()
+  }
+
+  func testFortyEightKilohertzResamplingMeetsPerFrameBudget() throws {
+    let encoder = PCM16AudioEncoder(targetSampleRate: 16_000)
+    let frame = RealtimeAudioCapturedFrame(
+      samples: (0..<960).map { sin(Float($0) * 0.05) * 0.25 },
+      sampleRate: 48_000,
+      sourceChannelCount: 1,
+      generation: 1,
+      capturedAt: 0
+    )
+    for _ in 0..<20 {
+      XCTAssertNotNil(encoder.encode(frame))
+    }
+    let warmBufferAllocationCount = encoder.allocatedAudioBufferCount
+
+    let iterations = 500
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    for _ in 0..<iterations {
+      XCTAssertNotNil(encoder.encode(frame))
+    }
+    let averageMilliseconds = (
+      ProcessInfo.processInfo.systemUptime - startedAt
+    ) * 1_000 / Double(iterations)
+    print("[RealtimeAudioLatency] resample48To16AverageMs=\(averageMilliseconds)")
+    let latencyAttachment = XCTAttachment(
+      string: "resample48To16AverageMs=\(averageMilliseconds)"
+    )
+    latencyAttachment.name = "Realtime PCM16 resampling latency"
+    latencyAttachment.lifetime = .keepAlways
+    add(latencyAttachment)
+
+    XCTAssertEqual(warmBufferAllocationCount, 2)
+    XCTAssertEqual(
+      encoder.allocatedAudioBufferCount,
+      warmBufferAllocationCount,
+      "steady-state realtime encoding must reuse both AVAudioPCMBuffer instances"
+    )
+
+    XCTAssertLessThan(
+      averageMilliseconds,
+      Self.resamplingBudgetMillisecondsPerFrame
+    )
   }
 
   func testDeliversCapturedSamplesAndRecordsMetrics() throws {
@@ -1078,7 +1525,434 @@ final class RealtimeAudioJitterBufferTests: XCTestCase {
   }
 }
 
+private final class RealtimeCaptureFeedbackProbe: @unchecked Sendable {
+  private let lock = NSLock()
+  private var feedbackCount = 0
+  private var secondCaptureAt: TimeInterval?
+  private var measuredSecondFeedbackMilliseconds = 0.0
+
+  func markSecondCapture(at time: TimeInterval) {
+    lock.lock()
+    secondCaptureAt = time
+    lock.unlock()
+  }
+
+  func record(at time: TimeInterval) -> (index: Int, delayMilliseconds: Double?) {
+    lock.lock()
+    defer { lock.unlock() }
+    feedbackCount += 1
+    guard feedbackCount == 2, let secondCaptureAt else {
+      return (feedbackCount, nil)
+    }
+    measuredSecondFeedbackMilliseconds = (time - secondCaptureAt) * 1_000
+    return (feedbackCount, measuredSecondFeedbackMilliseconds)
+  }
+
+  var secondFeedbackMilliseconds: Double {
+    lock.lock()
+    defer { lock.unlock() }
+    return measuredSecondFeedbackMilliseconds
+  }
+}
+
+private final class RealtimePlaybackStartCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+
+  func increment() {
+    lock.lock()
+    count += 1
+    lock.unlock()
+  }
+
+  var value: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return count
+  }
+}
+
+final class RealtimeAudioPlaybackLatencyTests: XCTestCase {
+  func testStartupThresholdCrossingSchedulesWithoutPollingDelay() {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-threshold-event-wake",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 1,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      schedulingSafetyIntervalMilliseconds: 200,
+      engineStartOverride: { true }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer { pipeline.stop() }
+
+    let prepared = expectation(description: "playback graph prepared")
+    pipeline.prepare(generation: 1) { isReady in
+      XCTAssertTrue(isReady)
+      prepared.fulfill()
+    }
+    wait(for: [prepared], timeout: 1)
+
+    // At 24 kHz a 1 ms startup threshold is 24 frames. Let the timer observe
+    // 23 frames first, then measure how long the threshold-crossing frame waits.
+    XCTAssertEqual(
+      pipeline.enqueue(Data(repeating: 0, count: 23 * 2), generation: 1),
+      .accepted
+    )
+    Thread.sleep(forTimeInterval: 0.030)
+
+    let crossedAt = ProcessInfo.processInfo.systemUptime
+    XCTAssertEqual(pipeline.enqueue(Data([0, 0]), generation: 1), .accepted)
+    var metrics = RealtimeAudioPlaybackPerformanceSnapshot.empty
+    let deadline = Date().addingTimeInterval(1)
+    while Date() < deadline {
+      metrics = pipeline.snapshot()
+      if metrics.scheduledChunks == 2 { break }
+      Thread.sleep(forTimeInterval: 0.001)
+    }
+    let elapsedMilliseconds = (ProcessInfo.processInfo.systemUptime - crossedAt) * 1_000
+    let attachment = XCTAttachment(
+      string: "eventDrivenThresholdCrossingMs=\(elapsedMilliseconds)"
+    )
+    attachment.name = "Realtime event-driven threshold-crossing latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertEqual(metrics.scheduledChunks, 2)
+    XCTAssertLessThan(elapsedMilliseconds, 10)
+  }
+
+  func testPCM16VectorDecodePreservesSignedLittleEndianExtremes() throws {
+    let samples: [Int16] = [.min, -16_384, -1, 0, 1, 16_384, .max]
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-pcm16-vector-mono",
+      outputFormat: .realtimePCM16Mono24kHz,
+      engineStartOverride: { true }
+    )
+    let format = try XCTUnwrap(
+      AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)
+    )
+
+    let buffer = try XCTUnwrap(pipeline.makePCMBuffer(
+      from: pcm16LittleEndian(samples),
+      format: format
+    ))
+    let channel = try XCTUnwrap(buffer.floatChannelData?[0])
+
+    XCTAssertEqual(buffer.frameLength, AVAudioFrameCount(samples.count))
+    for (index, sample) in samples.enumerated() {
+      XCTAssertEqual(channel[index], Float(sample) / 32_768.0, accuracy: 0.000_001)
+    }
+  }
+
+  func testPCM16VectorDecodeDeinterleavesStereoChannels() throws {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-pcm16-vector-stereo",
+      outputFormat: RealtimePCMOutputFormat(
+        sampleRate: 24_000,
+        channelCount: 2,
+        encoding: .signedInteger16LittleEndian
+      ),
+      engineStartOverride: { true }
+    )
+    let format = try XCTUnwrap(
+      AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 2)
+    )
+    let interleaved: [Int16] = [.min, .max, -16_384, 16_384, 0, -1]
+
+    let buffer = try XCTUnwrap(pipeline.makePCMBuffer(
+      from: pcm16LittleEndian(interleaved),
+      format: format
+    ))
+    let channels = try XCTUnwrap(buffer.floatChannelData)
+
+    XCTAssertEqual(buffer.frameLength, 3)
+    XCTAssertEqual(channels[0][0], -1, accuracy: 0.000_001)
+    XCTAssertEqual(channels[0][1], -0.5, accuracy: 0.000_001)
+    XCTAssertEqual(channels[0][2], 0, accuracy: 0.000_001)
+    XCTAssertEqual(channels[1][0], Float(Int16.max) / 32_768.0, accuracy: 0.000_001)
+    XCTAssertEqual(channels[1][1], 0.5, accuracy: 0.000_001)
+    XCTAssertEqual(channels[1][2], -1.0 / 32_768.0, accuracy: 0.000_001)
+  }
+
+  func testConcurrentInterruptsLeaveNextResponseIngressReusable() {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-interrupt-ingress-race",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 1_000,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: { true }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer { pipeline.stop() }
+
+    let packet = Data([0, 0])
+    DispatchQueue.concurrentPerform(iterations: 200) { index in
+      if index.isMultiple(of: 2) {
+        _ = pipeline.enqueue(packet, generation: 1)
+      } else {
+        pipeline.interrupt(generation: 1)
+      }
+    }
+
+    pipeline.invalidateAudioSystem(generation: 1)
+    XCTAssertEqual(pipeline.enqueue(packet, generation: 1), .accepted)
+    XCTAssertEqual(
+      pipeline.snapshot().currentQueuedFrames,
+      1,
+      "interrupt/enqueue races must not strand responseIsActive away from the jitter lifecycle"
+    )
+  }
+
+  func testPlayedMillisecondsDoNotLeakAcrossResponses() {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-played-ms-per-response",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 0,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: { true }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer { pipeline.stop() }
+
+    _ = pipeline.enqueue(Data(repeating: 0, count: 960), generation: 1)
+    pipeline.interrupt(generation: 1)
+
+    // 新一轮回复必须从 0 开始计数，否则会拿上一轮的进度去截断这一轮，
+    // 把服务端上下文截在一个错误的位置。
+    _ = pipeline.enqueue(Data(repeating: 0, count: 960), generation: 1)
+    XCTAssertEqual(pipeline.playedMillisecondsForActiveResponse, 0)
+  }
+
+  func testInterruptReportsZeroPlayedMillisecondsWhenNothingReachedTheSpeaker() {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-played-ms-floor",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 1_000,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: { true }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer { pipeline.stop() }
+
+    // 1s 的启动缓冲意味着这几帧还没被排到播放器，`.dataPlayedBack` 一次都没回调。
+    // 此时必须报 0：宁可不截断，也不能谎报一个用户根本没听到的时长，
+    // 否则服务端上下文会保留用户没听到的内容。
+    _ = pipeline.enqueue(Data(repeating: 0, count: 960), generation: 1)
+
+    XCTAssertEqual(pipeline.playedMillisecondsForActiveResponse, 0)
+    XCTAssertEqual(pipeline.interrupt(generation: 1), 0)
+  }
+
+  func testStaleGenerationInterruptStillReportsPlayedMillisecondsWithoutTouchingState() {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-played-ms-stale",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 0,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: { true }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer { pipeline.stop() }
+
+    XCTAssertEqual(
+      pipeline.interrupt(generation: 99),
+      0,
+      "过期 generation 的打断不应该报出别人的播放进度"
+    )
+  }
+
+  func testAudioSystemInvalidationRebuildsPlayerGraphWithoutClosingIngress() {
+    let engineStartCount = RealtimePlaybackStartCounter()
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-audio-system-recovery",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 0,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: {
+        engineStartCount.increment()
+        return true
+      }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer { pipeline.stop() }
+
+    let firstPrepare = expectation(description: "initial playback graph prepared")
+    pipeline.prepare(generation: 1) { isReady in
+      XCTAssertTrue(isReady)
+      firstPrepare.fulfill()
+    }
+    wait(for: [firstPrepare], timeout: 1)
+
+    let invalidationStartedAt = ProcessInfo.processInfo.systemUptime
+    pipeline.invalidateAudioSystem(generation: 1)
+    let invalidationMilliseconds = (
+      ProcessInfo.processInfo.systemUptime - invalidationStartedAt
+    ) * 1_000
+    let attachment = XCTAttachment(
+      string: "audioSystemInvalidateBarrierMs=\(invalidationMilliseconds)"
+    )
+    attachment.name = "Realtime audio-system invalidation barrier latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    XCTAssertLessThan(invalidationMilliseconds, 20)
+
+    let recoveredPrepare = expectation(description: "playback graph rebuilt")
+    pipeline.prepare(generation: 1) { isReady in
+      XCTAssertTrue(isReady)
+      recoveredPrepare.fulfill()
+    }
+    wait(for: [recoveredPrepare], timeout: 1)
+
+    XCTAssertEqual(engineStartCount.value, 2)
+    XCTAssertEqual(
+      pipeline.enqueue(Data([0, 0]), generation: 1),
+      .accepted,
+      "audio ingress must stay active across audio-system recovery"
+    )
+  }
+
+  func testFirstQwenPacketSchedulesWithinInteractiveBudget() {
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-prewarmed",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 0,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: {
+        Thread.sleep(forTimeInterval: 0.030)
+        return true
+      }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    let prepared = expectation(description: "playback engine prepared")
+    pipeline.prepare(generation: 1) { isReady in
+      XCTAssertTrue(isReady)
+      prepared.fulfill()
+    }
+    wait(for: [prepared], timeout: 1)
+
+    let packet = Data(repeating: 0, count: 15_360)
+    let startedAt = ProcessInfo.processInfo.systemUptime
+    XCTAssertEqual(pipeline.enqueue(packet, generation: 1), .accepted)
+
+    var metrics = RealtimeAudioPlaybackPerformanceSnapshot.empty
+    let deadline = Date().addingTimeInterval(1)
+    while Date() < deadline {
+      metrics = pipeline.snapshot()
+      if metrics.scheduledChunks > 0 { break }
+      Thread.sleep(forTimeInterval: 0.001)
+    }
+    let elapsedMilliseconds = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+    let attachment = XCTAttachment(
+      string: "firstPacketToScheduleMs=\(elapsedMilliseconds)\n"
+        + "receiveToScheduleMs=\(metrics.maximumReceiveToScheduleMilliseconds)\n"
+        + "decodeMs=\(metrics.maximumDecodeMilliseconds)"
+    )
+    attachment.name = "Realtime prewarmed playback scheduling latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+
+    XCTAssertEqual(metrics.scheduledChunks, 1)
+    XCTAssertLessThan(elapsedMilliseconds, 20)
+    XCTAssertLessThan(metrics.maximumReceiveToScheduleMilliseconds, 20)
+    XCTAssertLessThan(metrics.maximumDecodeMilliseconds, 1)
+    pipeline.stop()
+  }
+
+  func testInterruptWaitsForPlayerResetBarrierWithinBudget() {
+    let engineStartEntered = DispatchSemaphore(value: 0)
+    let releaseEngineStart = DispatchSemaphore(value: 0)
+    let interruptReturned = DispatchSemaphore(value: 0)
+    let pipeline = RealtimeAudioPlaybackPipeline(
+      label: "com.lunflux.hyper-meta-ai.tests.playback-interrupt-barrier",
+      outputFormat: RealtimeProviderAudioProfiles.qwen.outputFormat,
+      startupBufferMilliseconds: 0,
+      maximumJitterMilliseconds: RealtimeProviderAudioProfiles.qwen.maximumJitterMilliseconds,
+      engineStartOverride: {
+        engineStartEntered.signal()
+        return releaseEngineStart.wait(timeout: .now() + 1) == .success
+      }
+    )
+    pipeline.start(
+      generation: 1,
+      onFailure: { message in XCTFail("unexpected playback failure: \(message)") }
+    )
+    defer {
+      releaseEngineStart.signal()
+      pipeline.stop()
+    }
+
+    pipeline.prepare(generation: 1)
+    XCTAssertEqual(engineStartEntered.wait(timeout: .now() + 1), .success)
+    DispatchQueue.global(qos: .userInitiated).async {
+      pipeline.interrupt(generation: 1)
+      interruptReturned.signal()
+    }
+
+    XCTAssertEqual(
+      interruptReturned.wait(timeout: .now() + 0.03),
+      .timedOut,
+      "interrupt returned before queued player reset could run"
+    )
+    let releasedAt = ProcessInfo.processInfo.systemUptime
+    releaseEngineStart.signal()
+    XCTAssertEqual(interruptReturned.wait(timeout: .now() + 1), .success)
+    let barrierMilliseconds = (ProcessInfo.processInfo.systemUptime - releasedAt) * 1_000
+    let attachment = XCTAttachment(
+      string: "postReleaseInterruptBarrierMs=\(barrierMilliseconds)"
+    )
+    attachment.name = "Realtime interrupt player-reset barrier latency"
+    attachment.lifetime = .keepAlways
+    add(attachment)
+    XCTAssertLessThan(barrierMilliseconds, 20)
+  }
+
+  private func pcm16LittleEndian(_ samples: [Int16]) -> Data {
+    var data = Data(capacity: samples.count * MemoryLayout<Int16>.size)
+    for sample in samples {
+      let bits = UInt16(bitPattern: sample)
+      data.append(UInt8(truncatingIfNeeded: bits))
+      data.append(UInt8(truncatingIfNeeded: bits >> 8))
+    }
+    return data
+  }
+}
+
 final class StreamSessionLeaseRegistryTests: XCTestCase {
+  func testAgentTriggerLeaseKeepsControlsWithoutRequestingCamera() {
+    var registry = StreamSessionLeaseRegistry()
+
+    _ = registry.acquire(.agentTrigger)
+    XCTAssertTrue(registry.keepsAgentTriggerSession)
+    XCTAssertFalse(registry.requiresCameraStream)
+
+    _ = registry.acquire(.agentChat)
+    XCTAssertTrue(registry.requiresCameraStream)
+    _ = registry.release(.agentChat)
+    XCTAssertFalse(registry.requiresCameraStream)
+    XCTAssertTrue(registry.keepsAgentTriggerSession)
+  }
+
   func testOnlyTheFinalOwnerReleasesTheSharedSession() {
     var registry = StreamSessionLeaseRegistry()
 

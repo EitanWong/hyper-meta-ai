@@ -1,13 +1,21 @@
 /*
  * Qwen Realtime Model Catalog
- * 镜像 qwen-audio-agent shared/realtime-provider-catalog.mjs（v1.8.3）的
+ * 镜像 qwen-audio-agent shared/realtime-model-catalog.mjs（v1.10.1）的
  * DashScope Realtime 语音前端模型档案：
  *   - audio 系列：纯语音前端（低延迟、省流量），默认 qwen-audio-3.0-realtime-plus
  *   - omni 系列：多模态前端（文本/音频/图像），qwen3.5-omni-*-realtime
- * 未知模型 ID 一律回退到默认档案，避免旧配置失效。
+ * App 内置传输接入文本/音频/按需单帧图像；外部网关仍按其协议能力降级为视觉摘要文本。
  */
 
 import Foundation
+
+/// 内置实现对齐的上游发布点。Scripts/check-qwen-audio-agent-sync.sh 会在 CI
+/// 定期核对最新稳定 tag，发现漂移即失败，避免版本注释长期失真。
+enum QwenAudioAgentUpstream {
+    static let repositoryURL = "https://github.com/QwenAudio/qwen-audio-agent.git"
+    static let releaseTag = "v1.10.1"
+    static let commit = "1dea8779e73d9e1aaebfd8c6a847270cce39572f"
+}
 
 /// Qwen Realtime 语音前端模型档案
 struct QwenRealtimeModelProfile: Equatable, Identifiable, Sendable {
@@ -30,14 +38,18 @@ struct QwenRealtimeModelProfile: Equatable, Identifiable, Sendable {
     let displayName: String
     let inputSampleRate: Double
     let outputSampleRate: Double
+    /// 模型本身是否支持图片。
     let supportsImageInput: Bool
+    let transportSupportsImageInput: Bool
     let supportsFunctionCalling: Bool
+    let defaultVoice: String
+    let turnDetectionType: String
     let isDefault: Bool
 }
 
 /// Qwen Realtime 模型档案目录（纯逻辑，可测）
 enum QwenRealtimeModelCatalog {
-    /// 最新默认模型：qwen-audio-agent v1.8.3 的 DEFAULT_DASHSCOPE_REALTIME_MODEL
+    /// 最新默认模型：qwen-audio-agent v1.10.1 的 DEFAULT_DASHSCOPE_REALTIME_MODEL
     static let defaultModelID = "qwen-audio-3.0-realtime-plus"
 
     static let all: [QwenRealtimeModelProfile] = [
@@ -48,7 +60,10 @@ enum QwenRealtimeModelCatalog {
             inputSampleRate: 16_000,
             outputSampleRate: 24_000,
             supportsImageInput: false,
+            transportSupportsImageInput: false,
             supportsFunctionCalling: true,
+            defaultVoice: "longanqian",
+            turnDetectionType: "smart_turn",
             isDefault: true
         ),
         QwenRealtimeModelProfile(
@@ -58,7 +73,10 @@ enum QwenRealtimeModelCatalog {
             inputSampleRate: 16_000,
             outputSampleRate: 24_000,
             supportsImageInput: false,
+            transportSupportsImageInput: false,
             supportsFunctionCalling: true,
+            defaultVoice: "longanqian",
+            turnDetectionType: "smart_turn",
             isDefault: false
         ),
         QwenRealtimeModelProfile(
@@ -68,7 +86,10 @@ enum QwenRealtimeModelCatalog {
             inputSampleRate: 16_000,
             outputSampleRate: 24_000,
             supportsImageInput: true,
+            transportSupportsImageInput: false,
             supportsFunctionCalling: true,
+            defaultVoice: "Ethan",
+            turnDetectionType: "semantic_vad",
             isDefault: false
         ),
         QwenRealtimeModelProfile(
@@ -78,18 +99,10 @@ enum QwenRealtimeModelCatalog {
             inputSampleRate: 16_000,
             outputSampleRate: 24_000,
             supportsImageInput: true,
+            transportSupportsImageInput: false,
             supportsFunctionCalling: true,
-            isDefault: false
-        ),
-        // 旧版模型：仅保留兼容（历史配置/直连客户端），不推荐新会话使用
-        QwenRealtimeModelProfile(
-            id: "qwen3-omni-flash-realtime",
-            family: .omni,
-            displayName: "Qwen3 Omni Flash (旧)",
-            inputSampleRate: 16_000,
-            outputSampleRate: 24_000,
-            supportsImageInput: true,
-            supportsFunctionCalling: true,
+            defaultVoice: "Ethan",
+            turnDetectionType: "semantic_vad",
             isDefault: false
         ),
     ]
@@ -114,6 +127,27 @@ enum QwenRealtimeModelCatalog {
     }
 
     static let userDefaultsKey = "qwen_realtime_model"
+    static let audioVoiceUserDefaultsKey = "qwen_audio_realtime_voice"
+    static let omniVoiceUserDefaultsKey = "qwen_omni_realtime_voice"
+    private static let legacyVoiceUserDefaultsKey = "qwen_realtime_voice"
+
+    /// v1.9 起 Audio / Omni 音色覆盖相互独立；未覆盖时使用各模型族默认值。
+    static func voice(
+        for profile: QwenRealtimeModelProfile,
+        preferences: UserDefaults = .standard
+    ) -> String {
+        let key = profile.family == .audio
+            ? audioVoiceUserDefaultsKey
+            : omniVoiceUserDefaultsKey
+        if let override = nonEmpty(preferences.string(forKey: key)) {
+            return override
+        }
+        if profile.family == .audio,
+           let legacy = nonEmpty(preferences.string(forKey: legacyVoiceUserDefaultsKey)) {
+            return legacy
+        }
+        return profile.defaultVoice
+    }
 
     /// 指定家族（audio/omni）的可用模型，用于界面分组
     static func profiles(family: QwenRealtimeModelProfile.Family) -> [QwenRealtimeModelProfile] {
@@ -127,7 +161,11 @@ enum QwenRealtimeModelCatalog {
         if selected.family == family {
             return selected
         }
-        return familyProfiles.first(where: { !$0.id.contains("(旧)") && !$0.isDefault || $0.family == family })
-            ?? familyProfiles[0]
+        return familyProfiles.first ?? defaultProfile
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
