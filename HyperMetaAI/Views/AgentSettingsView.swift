@@ -883,7 +883,7 @@ struct AgentSettingsView: View {
                             Text(brain.displayName).tag(brain)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .onChange(of: brainDefault) { _, newValue in
                         AgentBrainSettings.selected = newValue
                     }

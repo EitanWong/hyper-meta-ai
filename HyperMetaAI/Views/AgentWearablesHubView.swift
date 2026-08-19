@@ -15,6 +15,7 @@ struct AgentWearablesHubView: View {
     var body: some View {
         List {
             statusSection
+            touchCapabilitySection
             homePreviewSection
             demoSection
             sourceSection
@@ -75,6 +76,36 @@ struct AgentWearablesHubView: View {
             return "agent.wearable.status.connected".localized(label)
         }
         return "agent.wearable.status.unregistered".localized
+    }
+
+    // MARK: - 触控能力
+
+    private var touchCapabilitySection: some View {
+        Section {
+            ForEach(AgentWearableTouchCatalog.realGlasses) { capability in
+                HStack(spacing: 12) {
+                    Image(systemName: capability.isAvailable ? "checkmark.circle.fill" : "minus.circle")
+                        .foregroundColor(capability.isAvailable ? .green : .secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(capability.kind.displayName)
+                            .foregroundColor(AppColors.textPrimary)
+                        Text(capability.detail)
+                            .font(AppTypography.caption)
+                            .foregroundColor(AppColors.textSecondary)
+                    }
+                    Spacer()
+                    Text(capability.isAvailable
+                         ? "agent.wearable.touch.available".localized
+                         : "agent.wearable.touch.unavailable".localized)
+                        .font(AppTypography.caption)
+                        .foregroundColor(capability.isAvailable ? .green : .secondary)
+                }
+            }
+        } header: {
+            Text("agent.wearable.touch.header".localized)
+        } footer: {
+            Text("agent.wearable.touch.footer".localized)
+        }
     }
 
     // MARK: - 镜片主页预览
@@ -157,10 +188,9 @@ struct AgentWearablesHubView: View {
     private var demoSection: some View {
         Section {
             demoRow(gesture: .wake, source: .inApp, icon: "waveform.circle.fill")
-            demoRow(gesture: .interrupt, source: .inApp, icon: "pause.circle.fill")
-            demoRow(gesture: .resume, source: .inApp, icon: "play.circle.fill")
             demoRow(gesture: .endTurn, source: .inApp, icon: "stop.circle.fill")
             demoRow(gesture: .captureVision, source: .inApp, icon: "eye.circle.fill")
+            demoRow(gesture: .captureButton, source: .glassesCaptureButton, icon: "camera.circle.fill")
             demoRow(gesture: .repeatLastReply, source: .inApp, icon: "arrow.counterclockwise")
             demoRow(gesture: .mockTap, source: .mockCaptouch, icon: "hand.tap.fill")
             demoRow(gesture: .mockTapAndHold, source: .mockCaptouch, icon: "hand.tap.fill")

@@ -162,6 +162,7 @@
 		LW10020002000200020002 /* AgentLiveActivityModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20010001000100010001 /* AgentLiveActivityModels.swift */; };
 		LW10030003000300030003 /* AgentLiveActivityWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20020002000200020002 /* AgentLiveActivityWidget.swift */; };
 		LW10040004000400040004 /* AgentLiveActivityManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = LW20030003000300030003 /* AgentLiveActivityManager.swift */; };
+		MO1001000100010001 /* AssistantOrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = MO2001000100010001 /* AssistantOrbView.swift */; };
 		NB1000000000000000000001 /* AgentNotificationButler.swift in Sources */ = {isa = PBXBuildFile; fileRef = NB2000000000000000000001 /* AgentNotificationButler.swift */; };
 		NR10010001000100010001 /* AppNavigationRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = NR20020002000200020002 /* AppNavigationRouter.swift */; };
 		OC1001000100010001 /* OpenClawModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = OC2001000100010001 /* OpenClawModels.swift */; };
@@ -434,6 +435,7 @@
 		LW20010001000100010001 /* AgentLiveActivityModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityModels.swift; sourceTree = "<group>"; };
 		LW20020002000200020002 /* AgentLiveActivityWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityWidget.swift; sourceTree = "<group>"; };
 		LW20030003000300030003 /* AgentLiveActivityManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivityManager.swift; sourceTree = "<group>"; };
+		MO2001000100010001 /* AssistantOrbView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AssistantOrbView.swift; sourceTree = "<group>"; };
 		NB2000000000000000000001 /* AgentNotificationButler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentNotificationButler.swift; sourceTree = "<group>"; };
 		NR20020002000200020002 /* AppNavigationRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppNavigationRouter.swift; path = Managers/AppNavigationRouter.swift; sourceTree = "<group>"; };
 		OC2001000100010001 /* OpenClawModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenClawModels.swift; sourceTree = "<group>"; };
@@ -664,6 +666,7 @@
 				4BA57AA32EF8227E002EC214 /* CircleButton.swift */,
 				4BA57AA42EF8227E002EC214 /* CustomButton.swift */,
 				4BA57AA52EF8227E002EC214 /* MediaPickerView.swift */,
+				MO2001000100010001 /* AssistantOrbView.swift */,
 				4BA57AA62EF8227E002EC214 /* StatusText.swift */,
 			);
 			path = Components;
@@ -1320,6 +1323,7 @@
 				QW1003000300030003 /* QwenVoiceSession.swift in Sources */,
 				QW1004000400040004 /* QwenVoiceView.swift in Sources */,
 				QW1005000500050005 /* QwenGatewayConfigSheetView.swift in Sources */,
+				MO1001000100010001 /* AssistantOrbView.swift in Sources */,
 				SS1001000100010001 /* SimplifiedSettingsView.swift in Sources */,
 				HM1001000100010001 /* HermesModels.swift in Sources */,
 				HM1002000200020002 /* HermesService.swift in Sources */,

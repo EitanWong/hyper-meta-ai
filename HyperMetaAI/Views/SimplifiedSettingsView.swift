@@ -21,8 +21,51 @@ struct SimplifiedSettingsView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("连接") {
+            List {
+                Section {
+                    LabeledContent {
+                        Label(
+                            wearablesStatusText,
+                            systemImage: streamViewModel.hasActiveDevice
+                                ? "checkmark.circle.fill"
+                                : "circle.dashed"
+                        )
+                        .labelStyle(.titleAndIcon)
+                        .foregroundStyle(streamViewModel.hasActiveDevice ? .green : .secondary)
+                    } label: {
+                        Label("Ray-Ban Meta", systemImage: "eyeglasses")
+                    }
+
+                    Toggle("assistant.settings.glasses.vision".localized, isOn: $visionEnabled)
+                        .onChange(of: visionEnabled) { _, enabled in
+                            AgentVisionSettings.injectionEnabled = enabled
+                        }
+
+                    if wearablesViewModel.registrationState == .registered {
+                        Button(role: .destructive) {
+                            wearablesViewModel.disconnectGlasses()
+                        } label: {
+                            Label(
+                                "assistant.settings.glasses.disconnect".localized,
+                                systemImage: "xmark.circle"
+                            )
+                        }
+                    } else {
+                        Button {
+                            wearablesViewModel.connectGlasses()
+                        } label: {
+                            Label(
+                                "assistant.settings.glasses.connect".localized,
+                                systemImage: "link"
+                            )
+                        }
+                        .disabled(wearablesViewModel.isRegistrationActionInFlight)
+                    }
+                } header: {
+                    Text("assistant.settings.glasses".localized)
+                }
+
+                Section {
                     Button {
                         showGatewayConfig = true
                     } label: {
@@ -35,11 +78,12 @@ struct SimplifiedSettingsView: View {
                                     .foregroundStyle(.secondary)
                             }
                         } label: {
-                            Label("Qwen Audio Gateway", systemImage: "waveform.badge.mic")
+                            Label("assistant.settings.voice.service".localized, systemImage: "waveform")
                         }
                     }
+                    .foregroundStyle(.primary)
 
-                    Picker("实时模型", selection: $selectedModelID) {
+                    Picker("assistant.settings.voice.model".localized, selection: $selectedModelID) {
                         ForEach(QwenRealtimeModelCatalog.all) { profile in
                             Text(profile.displayName).tag(profile.id)
                         }
@@ -47,10 +91,7 @@ struct SimplifiedSettingsView: View {
                     .onChange(of: selectedModelID) { _, modelID in
                         QwenRealtimeModelCatalog.setSelected(modelID)
                     }
-                }
-
-                Section("Agent") {
-                    Picker("任务大脑", selection: $selectedBrain) {
+                    Picker("assistant.settings.agent.brain".localized, selection: $selectedBrain) {
                         ForEach(AgentBrain.allCases) { brain in
                             Label(brain.displayName, systemImage: brain.symbolName).tag(brain)
                         }
@@ -58,14 +99,18 @@ struct SimplifiedSettingsView: View {
                     .onChange(of: selectedBrain) { _, brain in
                         AgentBrainSettings.selected = brain
                     }
+                } header: {
+                    Text("assistant.settings.conversation".localized)
+                }
 
-                    Toggle("持续在场", isOn: $presenceEnabled)
+                Section {
+                    Toggle("assistant.settings.agent.presence".localized, isOn: $presenceEnabled)
                         .onChange(of: presenceEnabled) { _, enabled in
                             AgentPresenceSettings.presenceEnabled = enabled
                             QwenVoiceSession.shared.refreshIdleWatchdog()
                         }
 
-                    Toggle("语音唤醒", isOn: $wakeWordEnabled)
+                    Toggle("assistant.settings.agent.wake".localized, isOn: $wakeWordEnabled)
                         .onChange(of: wakeWordEnabled) { _, enabled in
                             QwenVoiceSession.wakeWordEnabled = enabled
                             if enabled {
@@ -74,48 +119,33 @@ struct SimplifiedSettingsView: View {
                                 QwenVoiceSession.shared.stopWakeWordMonitoring()
                             }
                         }
-
-                    Button {
-                        showAgentSettings = true
-                    } label: {
-                        Label("Agent 与自动化", systemImage: "point.3.connected.trianglepath.dotted")
-                    }
-                }
-
-                Section("眼镜") {
-                    LabeledContent {
-                        Text(wearablesStatusText)
-                            .foregroundStyle(streamViewModel.hasActiveDevice ? .primary : .secondary)
-                    } label: {
-                        Label("Meta Ray-Ban", systemImage: "eyeglasses")
-                    }
-
-                    Toggle("允许视觉上下文", isOn: $visionEnabled)
-                        .onChange(of: visionEnabled) { _, enabled in
-                            AgentVisionSettings.injectionEnabled = enabled
-                        }
-
-                    if wearablesViewModel.registrationState == .registered {
-                        Button("断开眼镜", role: .destructive) {
-                            wearablesViewModel.disconnectGlasses()
-                        }
-                    } else {
-                        Button("连接眼镜") {
-                            wearablesViewModel.connectGlasses()
-                        }
-                        .disabled(wearablesViewModel.isRegistrationActionInFlight)
-                    }
+                } header: {
+                    Text("assistant.settings.controls".localized)
                 }
 
                 Section {
-                    LabeledContent("版本", value: "2.0.0")
+                    Button {
+                        showAgentSettings = true
+                    } label: {
+                        HStack {
+                            Label("assistant.settings.agent.more".localized, systemImage: "gearshape.2")
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+
+                    LabeledContent("assistant.settings.version".localized, value: "2.0.0")
                 }
             }
-            .navigationTitle("设置")
+            .listStyle(.insetGrouped)
+            .navigationTitle("settings.title".localized)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
+                    Button("assistant.primary.done".localized) { dismiss() }
                 }
             }
             .sheet(isPresented: $showGatewayConfig) {
@@ -134,9 +164,9 @@ struct SimplifiedSettingsView: View {
     private var gatewayStatusColor: Color {
         switch gateway.connectionState {
         case .connected: return .green
-        case .connecting: return .orange
+        case .connecting, .waking: return .orange
         case .failed: return .red
-        case .disconnected: return .secondary
+        case .disconnected, .sleeping: return .secondary
         }
     }
 
@@ -145,20 +175,22 @@ struct SimplifiedSettingsView: View {
             return gateway.mode.displayNameKey.localized
         }
         switch gateway.connectionState {
-        case .connected: return "在线"
-        case .connecting: return "连接中"
-        case .failed: return "需检查"
-        case .disconnected: return "未连接"
+        case .connected: return "assistant.settings.status.online".localized
+        case .connecting: return "assistant.settings.status.connecting".localized
+        case .waking: return "assistant.settings.status.waking".localized
+        case .sleeping: return "qwen.voice.sleeping".localized
+        case .failed: return "assistant.settings.status.check".localized
+        case .disconnected: return "qwen.voice.disconnected".localized
         }
     }
 
     private var wearablesStatusText: String {
         if streamViewModel.hasActiveDevice {
-            return "已连接"
+            return "qwen.voice.connected".localized
         }
         if wearablesViewModel.registrationState == .registered {
-            return "等待设备"
+            return "assistant.settings.status.waiting".localized
         }
-        return "未配对"
+        return "assistant.settings.status.unpaired".localized
     }
 }

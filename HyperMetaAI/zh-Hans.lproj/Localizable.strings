@@ -151,6 +151,7 @@
 "gallery.brain.auto" = "自动（推荐）";
 "gallery.brain.cancel" = "取消";
 "agent.vision.gallery.prompt" = "请看这张照片";
+"agent.vision.photo.button" = "选图发送";
 
 // MARK: - Common
 "common.delete" = "删除";
@@ -883,7 +884,8 @@
 "agent.vision.translate.sent" = "已发送翻译请求";
 "agent.vision.translate.notext" = "还没有可翻译的取词内容，先在镜片上点「OCR」";
 "agent.brain.default.toggle" = "语音默认大脑";
-"agent.brain.default.footer" = "Qwen 为原生实时语音；选 Hermes / OpenClaw 后，语音听写自动转发给所选大脑，回复经 TTS 播报。";
+"agent.brain.default.footer" = "默认 Auto：只从当前可用的后台 Agent 中选择；没有可用后端时自动进入仅前台模式。选择“不使用后台 Agent”可始终仅使用 Qwen 实时语音。";
+"agent.brain.none" = "不使用后台 Agent";
 "agent.trigger.interrupted" = "已打断，请说";
 "agent.trigger.resumed" = "已恢复，继续说";
 "agent.trigger.ended" = "已结束本回合";
@@ -891,16 +893,19 @@
 "qwen.voice.title" = "实时语音";
 "qwen.voice.brain" = "大脑";
 "qwen.voice.brain.forward" = "听写转发";
+"qwen.voice.brain.frontend_only" = "仅前台";
 "qwen.voice.subtitle" = "通过 qwen-audio-agent 网关进行全双工语音对话";
 "qwen.voice.section" = "实时语音";
 "qwen.voice.connected" = "已连接";
 "qwen.voice.connecting" = "连接中...";
+"qwen.voice.sleeping" = "待命中";
+"qwen.voice.waking" = "唤醒中...";
 "qwen.voice.disconnected" = "未连接";
 "qwen.voice.speaking" = "说话中";
 "qwen.voice.listening" = "聆听中";
 "qwen.voice.idle" = "空闲";
 "qwen.voice.tapstart" = "点击开始语音会话";
-"qwen.voice.tapstop" = "单击打断，长按结束";
+"qwen.voice.tapstop" = "再次单击或长按结束";
 "qwen.settings.section" = "Qwen 网关";
 "qwen.settings.footer" = "外部 qwen-audio-agent 网关地址（默认端口 3101）。";
 "qwen.settings.mode" = "网关来源";
@@ -918,6 +923,7 @@
 "qwen.voice.config.prompt" = "无法连接网关，请先配置。";
 "qwen.voice.config.hint" = "填写外部 qwen-audio-agent 网关的地址与端口（默认端口 3101）。";
 "qwen.error.api.key" = "使用内置 Qwen 网关前，请先配置 DashScope API Key。";
+"qwen.error.response.start.timeout" = "实时模型没有开始回复，语音连接已自动恢复，请再说一次。";
 "qwen.voice.tasks.running" = "%d 个任务进行中";
 "qwen.voice.idle.toggle" = "空闲自动结束";
 "qwen.voice.idle.footer" = "超过 120 秒无活动时自动结束会话。";
@@ -929,7 +935,7 @@
 "qwen.voice.vision.noapikey" = "请先在设置中配置视觉 API";
 "qwen.voice.vision.noframe" = "未获取到眼镜画面，请确认眼镜已连接";
 "qwen.voice.vision.failed" = "视野描述生成失败，请稍后重试";
-"qwen.voice.glasses.offline" = "未连接眼镜，镜腿触发不可用";
+"qwen.voice.glasses.offline" = "手机模式可正常使用语音和选图；镜腿触发不可用";
 "qwen.voice.history.header" = "上次会话";
 "agent.chat.history.restored" = "已恢复上次会话";
 "agent.chat.new.title" = "新建对话";
@@ -1158,7 +1164,7 @@
 "agent.presence.on" = "已开启持续在场：空闲时不再自动结束";
 "agent.presence.off" = "已关闭持续在场";
 "agent.voice.end.done" = "已结束会话";
-"agent.trigger.reconnected" = "眼镜已连接 · 单击恢复交互";
+"agent.trigger.reconnected" = "眼镜已连接 · 单击开始会话";
 "agent.permission.mode.title" = "权限审批模式";
 "agent.permission.mode.alwaysAsk" = "始终询问";
 "agent.permission.mode.alwaysAsk.detail" = "每个权限请求都弹卡确认（默认）";
@@ -1491,6 +1497,7 @@
 
 /* Lucky 外设触发中心 */
 "agent.wearable.source.glassesSession" = "眼镜触发";
+"agent.wearable.source.glassesCaptureButton" = "眼镜快门";
 "agent.wearable.source.glassesDisplay" = "镜片菜单";
 "agent.wearable.source.mockCaptouch" = "模拟镜腿";
 "agent.wearable.source.backTap" = "背部轻点";
@@ -1503,6 +1510,8 @@
 "agent.wearable.gesture.resume" = "恢复";
 "agent.wearable.gesture.endTurn" = "结束回合";
 "agent.wearable.gesture.captureVision" = "拍照识图";
+"agent.wearable.gesture.captureButton" = "快门拍照";
+"agent.wearable.gesture.doubleTap" = "双击";
 "agent.wearable.gesture.repeatLastReply" = "重听回复";
 "agent.wearable.gesture.mockTap" = "单击";
 "agent.wearable.gesture.mockTapAndHold" = "长按";
@@ -1516,6 +1525,21 @@
 "agent.wearable.outcome.dismiss" = "已关闭菜单";
 "agent.wearable.outcome.ignored.cooldown" = "已忽略（防抖）";
 "agent.wearable.outcome.ignored.noActiveSession" = "已忽略（无活动会话）";
+"agent.wearable.outcome.ignored.unsupportedGesture" = "已忽略（SDK 未提供该原始事件）";
+"agent.wearable.touch.header" = "Ray-Ban Meta 触控能力";
+"agent.wearable.touch.footer" = "单击开始会话，再次单击结束会话。App 不显示暂停状态；App 未运行时保留眼镜原生媒体控制。";
+"agent.wearable.touch.singleTap" = "单击";
+"agent.wearable.touch.doubleTap" = "双击";
+"agent.wearable.touch.longPress" = "长按";
+"agent.wearable.touch.captureButton" = "拍照按钮";
+"agent.wearable.touch.available" = "可用";
+"agent.wearable.touch.unavailable" = "SDK 未暴露";
+"agent.wearable.touch.detail.singleTap" = "由 DAT 会话状态推断为开始/结束开关";
+"agent.wearable.touch.detail.longPress" = "由 DAT stopped 状态推断为结束";
+"agent.wearable.touch.detail.mockTap" = "MockCaptouchKit tap()";
+"agent.wearable.touch.detail.mockHold" = "MockCaptouchKit tapAndHold()";
+"agent.wearable.touch.detail.unavailable" = "0.9.0 没有原始回调";
+"agent.wearable.touch.detail.captureUnavailable" = "相机可拍照，但快门按钮事件没有原始回调";
 "agent.wearable.hub.title" = "外设触发中心";
 "agent.wearable.status.header" = "眼镜状态";
 "agent.wearable.status.title" = "Meta AI 眼镜";
@@ -1600,6 +1624,7 @@
 "agent.ask.intent.brain" = "大脑";
 "agent.ask.brain.title" = "大脑";
 "agent.ask.brain.auto" = "自动";
+"agent.ask.brain.none" = "不使用后台 Agent";
 "agent.ask.brain.hermes" = "Hermes";
 "agent.ask.brain.openclaw" = "OpenClaw";
 "agent.ask.brain.custom" = "自定义 Agent";
@@ -1672,3 +1697,57 @@
 "reminder.schema.param.tags" = "标签";
 "reminder.schema.param.urls" = "链接";
 "reminder.schema.param.images" = "图片";
+
+/* Primary assistant */
+"assistant.primary.device.glasses" = "Ray-Ban Meta";
+"assistant.primary.device.phone" = "iPhone";
+"assistant.primary.start" = "开始对话";
+"assistant.primary.end" = "结束对话";
+"assistant.primary.vision.glasses" = "读取眼镜视野";
+"assistant.primary.vision.photo" = "选择图片";
+"assistant.primary.orb.hint.inactive" = "点按开始语音对话";
+"assistant.primary.orb.hint.active" = "点按结束当前语音会话";
+"assistant.primary.status.start" = "随时可以开始";
+"assistant.primary.status.ready" = "准备就绪";
+"assistant.primary.status.connecting" = "正在连接";
+"assistant.primary.status.waking" = "正在唤醒";
+"assistant.primary.status.listening" = "正在聆听";
+"assistant.primary.status.thinking" = "正在思考";
+"assistant.primary.status.speaking" = "正在回应";
+"assistant.primary.status.working" = "正在执行任务";
+"assistant.primary.status.error" = "连接异常";
+"assistant.primary.detail.glasses" = "正在使用 Ray-Ban Meta";
+"assistant.primary.detail.phone" = "正在使用 iPhone";
+"assistant.primary.feedback.interrupted" = "已打断回应";
+"assistant.primary.feedback.connecting" = "正在连接";
+"assistant.primary.feedback.microphone" = "需要麦克风权限";
+"assistant.primary.permission.title" = "需要确认";
+"assistant.primary.permission.deny" = "拒绝";
+"assistant.primary.permission.allow" = "允许";
+"assistant.primary.tasks.title" = "任务";
+"assistant.primary.tasks.empty.title" = "暂无任务";
+"assistant.primary.tasks.empty.detail" = "任务进度与结果会显示在这里。";
+"assistant.primary.done" = "完成";
+
+/* Simplified settings */
+"assistant.settings.connection" = "连接";
+"assistant.settings.conversation" = "对话";
+"assistant.settings.controls" = "交互";
+"assistant.settings.voice.service" = "语音服务";
+"assistant.settings.voice.model" = "语音模型";
+"assistant.settings.agent" = "Agent";
+"assistant.settings.agent.brain" = "任务 Agent";
+"assistant.settings.agent.presence" = "持续对话";
+"assistant.settings.agent.wake" = "语音唤醒";
+"assistant.settings.agent.more" = "高级设置";
+"assistant.settings.glasses" = "眼镜";
+"assistant.settings.glasses.vision" = "使用眼镜视野";
+"assistant.settings.glasses.connect" = "连接眼镜";
+"assistant.settings.glasses.disconnect" = "断开眼镜";
+"assistant.settings.version" = "版本";
+"assistant.settings.status.online" = "在线";
+"assistant.settings.status.connecting" = "连接中";
+"assistant.settings.status.waking" = "唤醒中";
+"assistant.settings.status.check" = "需检查";
+"assistant.settings.status.waiting" = "等待设备";
+"assistant.settings.status.unpaired" = "未配对";
