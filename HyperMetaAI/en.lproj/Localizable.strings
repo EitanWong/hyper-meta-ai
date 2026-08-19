@@ -914,6 +914,7 @@
 "qwen.settings.mode.builtin.footer" = "Built-in is the default. The App connects directly to Qwen Realtime using your DashScope API key.";
 "qwen.settings.mode.external.footer" = "Use a compatible qwen-audio-agent gateway at an address you provide.";
 "qwen.settings.external.section" = "External Address";
+"qwen.settings.tls" = "Use TLS";
 "qwen.settings.api.status" = "DashScope API Key";
 "qwen.settings.api.configured" = "Configured";
 "qwen.settings.api.missing" = "Required";
@@ -921,7 +922,6 @@
 "qwen.settings.saved" = "Saved";
 "qwen.voice.config" = "Gateway";
 "qwen.voice.config.prompt" = "Cannot reach the gateway. Configure it to retry.";
-"qwen.voice.config.hint" = "Enter the host and port of the external qwen-audio-agent gateway (default port 3101).";
 "qwen.error.api.key" = "Configure a DashScope API key to use the built-in Qwen Gateway.";
 "qwen.error.response.start.timeout" = "The realtime model did not start a reply. The voice connection was recovered; please try again.";
 "qwen.voice.tasks.running" = "%d task(s) running";

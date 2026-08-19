@@ -175,6 +175,7 @@
 		QW1003000300030003 /* QwenVoiceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2003000300030003 /* QwenVoiceSession.swift */; };
 		QW1004000400040004 /* QwenVoiceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2004000400040004 /* QwenVoiceView.swift */; };
 		QW1005000500050005 /* QwenGatewayConfigSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2005000500050005 /* QwenGatewayConfigSheetView.swift */; };
+		QW1006000600060006 /* QwenGatewayConfigurationSections.swift in Sources */ = {isa = PBXBuildFile; fileRef = QW2006000600060006 /* QwenGatewayConfigurationSections.swift */; };
 		RM1000000000000000000001 /* AgentReminderControlIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = RM2000000000000000000001 /* AgentReminderControlIntent.swift */; };
 		RS1001000100010001 /* RTMPStreamScenario.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2001000100010001 /* RTMPStreamScenario.swift */; };
 		RS1002000200020002 /* RTMPRecording.swift in Sources */ = {isa = PBXBuildFile; fileRef = RS2002000200020002 /* RTMPRecording.swift */; };
@@ -447,6 +448,7 @@
 		QW2003000300030003 /* QwenVoiceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenVoiceSession.swift; sourceTree = "<group>"; };
 		QW2004000400040004 /* QwenVoiceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenVoiceView.swift; sourceTree = "<group>"; };
 		QW2005000500050005 /* QwenGatewayConfigSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenGatewayConfigSheetView.swift; sourceTree = "<group>"; };
+		QW2006000600060006 /* QwenGatewayConfigurationSections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QwenGatewayConfigurationSections.swift; sourceTree = "<group>"; };
 		RM2000000000000000000001 /* AgentReminderControlIntent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentReminderControlIntent.swift; sourceTree = "<group>"; };
 		RS2001000100010001 /* RTMPStreamScenario.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPStreamScenario.swift; sourceTree = "<group>"; };
 		RS2002000200020002 /* RTMPRecording.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTMPRecording.swift; sourceTree = "<group>"; };
@@ -718,6 +720,7 @@
 				TL2001000100010001 /* AgentTaskListView.swift */,
 				QW2004000400040004 /* QwenVoiceView.swift */,
 				QW2005000500050005 /* QwenGatewayConfigSheetView.swift */,
+				QW2006000600060006 /* QwenGatewayConfigurationSections.swift */,
 				SS2001000100010001 /* SimplifiedSettingsView.swift */,
 				AG200B000B000B000B /* CustomAgentConfigSheetView.swift */,
 				AG2019001900190019 /* AgentDiagnosticsView.swift */,
@@ -1319,6 +1322,7 @@
 				QW1003000300030003 /* QwenVoiceSession.swift in Sources */,
 				QW1004000400040004 /* QwenVoiceView.swift in Sources */,
 				QW1005000500050005 /* QwenGatewayConfigSheetView.swift in Sources */,
+				QW1006000600060006 /* QwenGatewayConfigurationSections.swift in Sources */,
 				MO1001000100010001 /* AssistantOrbView.swift in Sources */,
 				SS1001000100010001 /* SimplifiedSettingsView.swift in Sources */,
 				HM1001000100010001 /* HermesModels.swift in Sources */,

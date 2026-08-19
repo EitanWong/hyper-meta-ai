@@ -914,6 +914,7 @@
 "qwen.settings.mode.builtin.footer" = "默认使用内置网关，App 使用已保存的 DashScope API Key 直连 Qwen Realtime。";
 "qwen.settings.mode.external.footer" = "使用你提供地址的兼容 qwen-audio-agent 网关。";
 "qwen.settings.external.section" = "外部地址";
+"qwen.settings.tls" = "使用 TLS";
 "qwen.settings.api.status" = "DashScope API Key";
 "qwen.settings.api.configured" = "已配置";
 "qwen.settings.api.missing" = "需要配置";
@@ -921,7 +922,6 @@
 "qwen.settings.saved" = "已保存";
 "qwen.voice.config" = "网关配置";
 "qwen.voice.config.prompt" = "无法连接网关，请先配置。";
-"qwen.voice.config.hint" = "填写外部 qwen-audio-agent 网关的地址与端口（默认端口 3101）。";
 "qwen.error.api.key" = "使用内置 Qwen 网关前，请先配置 DashScope API Key。";
 "qwen.error.response.start.timeout" = "实时模型没有开始回复，语音连接已自动恢复，请再说一次。";
 "qwen.voice.tasks.running" = "%d 个任务进行中";
