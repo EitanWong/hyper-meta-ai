@@ -286,6 +286,15 @@ struct StreamSessionLeaseRegistry {
     owners.isEmpty
   }
 
+  /// The trigger lease keeps buttons/display responsive without powering the camera stream.
+  var keepsAgentTriggerSession: Bool {
+    owners.contains(.agentTrigger)
+  }
+
+  var requiresCameraStream: Bool {
+    owners.contains { $0 != .agentTrigger }
+  }
+
   /// Live AI owns a direct foreground preview. This flag retains the raw direct
   /// path as a fallback when a future transport profile selects raw frames.
   var usesDirectRawPreview: Bool {
@@ -405,9 +414,10 @@ class StreamSessionViewModel: ObservableObject {
   @Published var showLeanEat: Bool = false
 
   private var timerTask: Task<Void, Never>?
-  // DAT 0.8 scopes camera capabilities to a DeviceSession. A stopped session
-  // cannot be restarted, so each streaming run owns a fresh session and stream.
+  // DAT scopes camera capabilities to a DeviceSession. A stopped session
+  // cannot be restarted, so each streaming run owns a fresh session and camera.
   private var deviceSession: DeviceSession?
+  private var camera: MWDATCamera.Camera?
   private var stream: MWDATCamera.Stream?
   // Listener tokens are used to manage DAT SDK event subscriptions
   private var stateListenerToken: AnyListenerToken?
@@ -427,6 +437,7 @@ class StreamSessionViewModel: ObservableObject {
   private var stopOperationGeneration = 0
   private var startAttemptGeneration = 0
   private var recoveryTask: Task<Void, Never>?
+  private var triggerRecoveryTask: Task<Void, Never>?
   private var recoveryAttempts = 0
   private var terminalDeviceSessionError: DeviceSessionError?
   private var automaticRecoveryIsSuppressed = false
@@ -434,7 +445,7 @@ class StreamSessionViewModel: ObservableObject {
   private var isStoppingUnderlyingSession = false
   /// 眼镜物理触发事件回调（Agent 页设置；同一时间仅一个页面活跃）
   var onDeviceTrigger: ((AgentDeviceTrigger) -> Void)?
-  /// 设备断连后重新可用回调（Agent 页用于提示「单击恢复交互」）
+  /// 设备断连后重新可用回调（Agent 页用于提示「单击开始会话」）
   var onDeviceReconnected: (() -> Void)?
   /// 眼镜变为可用回调（系统级功能监听：连接问候等；进入页面首次可用即触发）
   var onDeviceAvailable: (() -> Void)? {
@@ -572,14 +583,26 @@ class StreamSessionViewModel: ObservableObject {
   /// last owner releases it.
   func releaseStream(for owner: StreamSessionOwner) async {
     guard leases.release(owner) else { return }
+    if !leases.keepsAgentTriggerSession {
+      triggerRecoveryTask?.cancel()
+      triggerRecoveryTask = nil
+    }
 
-    guard leases.isEmpty else { return }
+    if !leases.isEmpty, leases.requiresCameraStream {
+      return
+    }
 
     recoveryTask?.cancel()
     recoveryTask = nil
     cancelStartAttempt()
     stopUnderlyingSession(preservingFailure: sessionState.isFailure)
     await waitForPendingStop()
+
+    // A one-frame vision request may finish while the lightweight trigger lease remains.
+    // Restart only the device session so camera power is released but temple controls stay live.
+    if leases.keepsAgentTriggerSession {
+      _ = await startAgentTriggerSession(allowBackground: !isApplicationActive)
+    }
   }
 
   /// Agent 交互页专用：启动一个不采集视频的轻量会话，让镜腿触发事件
@@ -589,12 +612,17 @@ class StreamSessionViewModel: ObservableObject {
   func acquireAgentTriggerSession() async -> Bool {
     _ = leases.acquire(.agentTrigger)
 
+    return await startAgentTriggerSession(allowBackground: !isApplicationActive)
+  }
+
+  private func startAgentTriggerSession(allowBackground: Bool) async -> Bool {
+
     guard !requiresDATGlassesAppUpdate || datGlassesAppUpdateRetryGate.consumeRetry() else {
       return false
     }
     guard terminalDeviceSessionError == nil,
           !requiresSessionResetAfterDisconnect,
-          isApplicationActive else {
+          (isApplicationActive || allowBackground) else {
       return false
     }
     guard hasActiveDevice else {
@@ -605,10 +633,20 @@ class StreamSessionViewModel: ObservableObject {
     do {
       try createDeviceSessionIfNeeded()
       guard let deviceSession else { return false }
-      if deviceSession.state != .started {
+      switch deviceSession.state {
+      case .started, .paused:
+        return true
+      case .starting:
+        break
+      case .idle, .stopped:
         try deviceSession.start()
+      case .stopping:
+        return false
       }
-      guard await waitForDeviceSessionToBecomeReady(attempt: makeAgentTriggerAttempt()) else {
+      guard await waitForDeviceSessionToBecomeReady(
+        attempt: makeAgentTriggerAttempt(),
+        allowBackground: allowBackground
+      ) else {
         return false
       }
       return true
@@ -745,17 +783,19 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func createStreamIfNeeded() throws {
-    guard stream == nil else { return }
+    guard camera == nil, stream == nil else { return }
     guard let deviceSession else {
       throw StreamingSetupError.deviceSessionUnavailable
     }
     guard deviceSession.state == .started else {
       throw StreamingSetupError.deviceSessionNotReady
     }
-    guard let stream = try deviceSession.addStream(config: makeStreamConfiguration()) else {
+    guard let camera = try deviceSession.addCamera(config: makeStreamConfiguration()) else {
       throw StreamingSetupError.streamUnavailable
     }
 
+    self.camera = camera
+    let stream = camera.stream
     self.stream = stream
     subscribe(to: stream, generation: streamGeneration)
     updateStatusFromState(stream.state)
@@ -1027,6 +1067,7 @@ class StreamSessionViewModel: ObservableObject {
       videoFrameMetrics.recordDrop(.staleGeneration)
     }
     stream = nil
+    camera = nil
     deviceSession = nil
     AgentDisplayHub.shared.detach()
   }
@@ -1115,7 +1156,7 @@ class StreamSessionViewModel: ObservableObject {
 
       releaseStreamResources()
       sessionState = .failed("The glasses device session stopped unexpectedly.")
-      scheduleRecoveryIfNeeded()
+      recoverSessionForCurrentLeases()
     }
   }
 
@@ -1235,6 +1276,8 @@ class StreamSessionViewModel: ObservableObject {
     leases.removeAll()
     recoveryTask?.cancel()
     recoveryTask = nil
+    triggerRecoveryTask?.cancel()
+    triggerRecoveryTask = nil
     cancelStartAttempt()
     deviceMonitorTask?.cancel()
     deviceMonitorTask = nil
@@ -1254,9 +1297,20 @@ class StreamSessionViewModel: ObservableObject {
     isApplicationActive = false
     recoveryTask?.cancel()
     recoveryTask = nil
+    triggerRecoveryTask?.cancel()
+    triggerRecoveryTask = nil
     cancelStartAttempt()
+
+    // A trigger-only DAT session carries no video frames and may stay on the declared
+    // Bluetooth/external-accessory background channel. Any camera owner is suspended.
+    if leases.keepsAgentTriggerSession, !leases.requiresCameraStream, stream == nil {
+      return
+    }
     stopUnderlyingSession()
     await waitForPendingStop()
+    if leases.keepsAgentTriggerSession {
+      _ = await startAgentTriggerSession(allowBackground: true)
+    }
   }
 
   func resumeAfterForeground() {
@@ -1264,7 +1318,7 @@ class StreamSessionViewModel: ObservableObject {
 
     isApplicationActive = true
     recoveryAttempts = 0
-    scheduleRecoveryIfNeeded()
+    recoverSessionForCurrentLeases()
   }
 
   private func ensureStreamIsRunning() async -> Bool {
@@ -1304,7 +1358,7 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func startUnderlyingSession(attempt: Int) async -> Bool {
-    guard isCurrentStartAttempt(attempt), !leases.isEmpty else { return false }
+    guard isCurrentStartAttempt(attempt), leases.requiresCameraStream else { return false }
     guard isApplicationActive else { return false }
     guard hasActiveDevice else { return false }
 
@@ -1345,7 +1399,7 @@ class StreamSessionViewModel: ObservableObject {
             !Task.isCancelled,
             isApplicationActive,
             hasActiveDevice,
-            !leases.isEmpty else {
+            leases.requiresCameraStream else {
         return false
       }
 
@@ -1455,7 +1509,10 @@ class StreamSessionViewModel: ObservableObject {
     }
   }
 
-  private func waitForDeviceSessionToBecomeReady(attempt: Int) async -> Bool {
+  private func waitForDeviceSessionToBecomeReady(
+    attempt: Int,
+    allowBackground: Bool = false
+  ) async -> Bool {
     guard let deviceSession else { return false }
 
     switch deviceSession.state {
@@ -1489,7 +1546,7 @@ class StreamSessionViewModel: ObservableObject {
 
     guard isCurrentStartAttempt(attempt),
           !Task.isCancelled,
-          isApplicationActive,
+          (isApplicationActive || allowBackground),
           !requiresSessionResetAfterDisconnect,
           terminalDeviceSessionError == nil else {
       return false
@@ -1512,7 +1569,7 @@ class StreamSessionViewModel: ObservableObject {
     // synchronously emit a final frame/state from stop().
     clearPublishedCameraState()
     let stoppingDeviceSession = deviceSession
-    stream?.stop()
+    camera?.stop()
     stoppingDeviceSession?.stop()
 
     stopOperationGeneration &+= 1
@@ -1755,6 +1812,8 @@ class StreamSessionViewModel: ObservableObject {
       cancelStartAttempt()
       recoveryTask?.cancel()
       recoveryTask = nil
+      triggerRecoveryTask?.cancel()
+      triggerRecoveryTask = nil
       // hasActiveDevice immediately makes cameraCaptureState unavailable.
       // Defer SDK cleanup until after this DAT callback returns: the SDK may
       // still be dismantling its device channel while delivering the event.
@@ -1770,7 +1829,7 @@ class StreamSessionViewModel: ObservableObject {
         self.objectWillChange.send()
         if self.hasActiveDevice {
           self.recoveryAttempts = 0
-          self.scheduleRecoveryIfNeeded()
+          self.recoverSessionForCurrentLeases()
         }
       }
       return
@@ -1779,7 +1838,7 @@ class StreamSessionViewModel: ObservableObject {
     // A new device availability event is a fresh recovery opportunity, not a
     // continuation of failures from a disconnected device session.
     recoveryAttempts = 0
-    scheduleRecoveryIfNeeded()
+    recoverSessionForCurrentLeases()
     onDeviceAvailable?()
 
     if lostDeviceWhileReconnectListenerActive {
@@ -1796,7 +1855,7 @@ class StreamSessionViewModel: ObservableObject {
   }
 
   private func scheduleRecoveryIfNeeded() {
-    guard !leases.isEmpty,
+    guard leases.requiresCameraStream,
           isApplicationActive,
           hasActiveDevice,
           !requiresSessionResetAfterDisconnect,
@@ -1815,23 +1874,66 @@ class StreamSessionViewModel: ObservableObject {
       guard let self, !Task.isCancelled else { return }
 
       self.recoveryTask = nil
-      guard !self.leases.isEmpty, self.hasActiveDevice else { return }
+      guard self.leases.requiresCameraStream, self.hasActiveDevice else { return }
 
       _ = await self.ensureStreamIsRunning()
+    }
+  }
+
+  private func recoverSessionForCurrentLeases() {
+    if isApplicationActive, leases.requiresCameraStream {
+      scheduleRecoveryIfNeeded()
+      return
+    }
+    scheduleAgentTriggerRecoveryIfNeeded()
+  }
+
+  private func scheduleAgentTriggerRecoveryIfNeeded() {
+    guard triggerRecoveryTask == nil,
+          leases.keepsAgentTriggerSession,
+          (!leases.requiresCameraStream || !isApplicationActive),
+          hasActiveDevice,
+          !requiresSessionResetAfterDisconnect,
+          terminalDeviceSessionError == nil else {
+      return
+    }
+    if let state = deviceSession?.state {
+      switch state {
+      case .started, .starting, .paused, .stopping:
+        return
+      case .idle, .stopped:
+        break
+      }
+    }
+
+    let allowBackground = !isApplicationActive
+    triggerRecoveryTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      defer { self.triggerRecoveryTask = nil }
+      guard !Task.isCancelled,
+            self.leases.keepsAgentTriggerSession else {
+        return
+      }
+      _ = await self.startAgentTriggerSession(allowBackground: allowBackground)
     }
   }
 
   private func recoverFromStreamErrorIfNeeded(_ error: StreamError, generation: Int) {
     guard StreamSessionRecoveryPolicy.shouldRetry(error),
           streamGeneration == generation,
-          !leases.isEmpty else {
+          leases.requiresCameraStream else {
       return
     }
 
     Task { @MainActor [weak self] in
       guard let self, self.streamGeneration == generation else { return }
       self.stopUnderlyingSession()
-      self.scheduleRecoveryIfNeeded()
+      await self.waitForPendingStop()
+      if self.leases.requiresCameraStream {
+        self.scheduleRecoveryIfNeeded()
+      } else if self.leases.keepsAgentTriggerSession {
+        _ = await self.startAgentTriggerSession(allowBackground: !self.isApplicationActive)
+      }
     }
   }
 
@@ -1845,7 +1947,12 @@ class StreamSessionViewModel: ObservableObject {
     Task { @MainActor [weak self] in
       guard let self, self.streamGeneration == generation else { return }
       self.stopUnderlyingSession()
-      self.scheduleRecoveryIfNeeded()
+      await self.waitForPendingStop()
+      if self.leases.requiresCameraStream {
+        self.scheduleRecoveryIfNeeded()
+      } else if self.leases.keepsAgentTriggerSession {
+        _ = await self.startAgentTriggerSession(allowBackground: !self.isApplicationActive)
+      }
     }
   }
 
