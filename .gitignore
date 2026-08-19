@@ -46,8 +46,13 @@ android/local.properties
 *.mobileprovision
 *.dSYM/
 
-# Signing tutorial images
-/
-
 # OpenClaw reference (not part of this project)
 openclaw-ref/
+
+# Hand-rolled change snapshots. These predate using git branches for the same
+# purpose; git history is the source of truth for what changed and how to revert.
+.codex-artifacts/
+DIFF_FILE
+MODIFIED_FILE
+VERIFICATION.txt
+ROLLBACK.sh
