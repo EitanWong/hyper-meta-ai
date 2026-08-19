@@ -38,6 +38,14 @@ jobs:
         run: |
           bash -n Scripts/run-ios-tests.sh
           bash -n Scripts/profile-ios-video-pipeline.sh
+          bash -n Scripts/check-qwen-audio-agent-sync.sh
+          bash -n Scripts/check-meta-wearables-sdk.sh
+
+      - name: Verify Qwen Audio Agent compatibility baseline
+        run: ./Scripts/check-qwen-audio-agent-sync.sh
+
+      - name: Verify Meta Wearables DAT SDK is current
+        run: ./Scripts/check-meta-wearables-sdk.sh
 
       - name: Check committed whitespace errors
         run: git diff-tree --check --no-commit-id -r "$GITHUB_SHA"

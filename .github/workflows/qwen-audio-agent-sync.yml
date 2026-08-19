@@ -1,0 +1,28 @@
+name: Qwen Audio Agent Sync
+
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  push:
+    paths:
+      - "HyperMetaAI/Services/Qwen/**"
+      - "Scripts/check-qwen-audio-agent-sync.sh"
+      - ".github/workflows/qwen-audio-agent-sync.yml"
+  pull_request:
+    paths:
+      - "HyperMetaAI/Services/Qwen/**"
+      - "Scripts/check-qwen-audio-agent-sync.sh"
+      - ".github/workflows/qwen-audio-agent-sync.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  latest-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify embedded compatibility baseline
+        run: ./Scripts/check-qwen-audio-agent-sync.sh

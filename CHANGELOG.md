@@ -7,7 +7,30 @@
 ### 新增：Agent 中心（OpenClaw + Hermes + Qwen 统一接入）
 
 - Agent Hub：统一接入 OpenClaw、Hermes 与自定义 Agent（WebSocket/HTTP），任务列表、诊断面板、记忆与规则管理。
-- 内置网关（Built-in Gateway）：对齐 qwen-audio-agent v1.8.3 网关核心——spawn_thinking 非阻塞工作队列（受理立即返回、owner FIFO、每 owner 单在飞）、协调协议（state / mode / presentation 解析与规范化、非终态最多重试 2 次、最终语音只来自 presentation.speech）、action-promise 守卫与实时响应生命周期、公告安全插入窗口（用户说话 / 回合挂起 / 音频排队时暂缓播报）；「问 Lucky」Siri 单轮问答改走内置网关协调执行（协议提示词 + 重试 + 最终语音抽取，纯文本后端自动回退）；默认 AI 名称改为 Lucky（画像 / 分享 / 语音文案全量统一）。
+- 内置网关（Built-in Gateway）：兼容基线升级到 qwen-audio-agent v1.10.1；保留 spawn_thinking 非阻塞工作队列（受理立即返回、owner FIFO、每 owner 单在飞）、协调协议（state / mode / presentation 解析与规范化、非终态最多重试 2 次、最终语音只来自 presentation.speech）、action-promise 守卫与实时响应生命周期、公告安全插入窗口（用户说话 / 回合挂起 / 音频排队时暂缓播报）；「问 Lucky」Siri 单轮问答走同一内置网关协调执行。
+- 后台 Agent 模式：默认仍为 `Auto`；Auto 只在已成功配置且就绪的 OpenClaw / Hermes / 自定义 Agent 中路由，没有任何可用后台时自动进入仅前台模式，不创建后台任务；设置、语音页、Siri 与快捷指令均可明确选择「不使用后台 Agent」。
+- Qwen 上游同步门禁：内置 DashScope Realtime 兼容层固定记录 qwen-audio-agent `v1.10.1` / `1dea8779e73d9e1aaebfd8c6a847270cce39572f`，GitHub Actions 每日及每次 push / PR 核对上游最新稳定 tag，发现漂移即阻止仓库检查通过。
+- Qwen 任意时刻打断：会话层按 `responseId` 有界记忆已取消响应，丢弃打断竞态中迟到的音频、完成和中断事件，避免残音回弹或旧回复误结束新回复；手动暂停期间不再接受新的播放包。
+- Qwen 响应生命周期关联：消费上游 `response.started`，内置 DashScope 适配器保留当前 provider `responseId` 并在本地 interrupt 回传；取消后无 `responseId` 的迟到音频必须等下一次明确 response 生命周期，连接断开 / 重连同时清空播放队列。
+- Qwen 重连播放就绪：传输丢失改为 interrupt 清空播放队列但保持 ingress 活跃，重连后的首个有效响应无需重建会话即可播放；响应已知与播放已开始分离，PCM 包只有实际进入播放队列后才发布 speaking 并向上游回执一次 playback.started，拒绝包不再制造“界面在说但扬声器无声”的假状态。
+- Qwen 首包播放预热：输入音频会话激活后立即异步创建并启动播放图，把 `AVAudioEngine` 建图 / 启动移出首个 PCM 包路径；新增 receive→schedule 指标及 20 ms 首包调度门禁，预热失败时仍由首包路径自动重试。
+- Qwen 播放事件驱动调度：每个成功入队的音频包通过带锁合并唤醒立即驱动播放队列，跨越启动阈值或 underrun 后恢复不再等待 `5 ms` 轮询；轮询改为 `20 ms` 低频安全兜底，活动响应期间理论检查频率由每秒 200 次降至 50 次。确定性阈值跨越基准由 `169.711 ms` 降至 `1.472 ms`（减少 `99.133%`），连续 10 次复测均低于 `1.5 ms`，并加入 `<10 ms` 回归门禁。
+- Qwen 入站音频解码：`audio.delta` 的 Base64 PCM 在 Gateway 后台解析队列完成解码，并携带 WebSocket 接收时刻进入播放管线，使 receive→schedule 覆盖真实解析与 MainActor 交付；连续音频包不再重复发布相同的 `isSpeaking=true`，降低播报突发期间的主线程占用与打断调度抖动。
+- Qwen 内置事件直通：DashScope 适配器在提供方回调线程直接生成带接收时刻的强类型 Gateway 事件，App 内置模式不再把已解析事件重建成 JSON 后交给服务层二次解析；外部 Gateway 字符串协议与兼容入口保持不变。15,360 字节音频包 200 次基准由平均 `127.638 µs` 降至 `60.626 µs`（减少 `52.501%`），并加入 `<100 µs` 回归门禁。
+- Qwen 播放 PCM 向量化：播放队列用 Accelerate 直接把对齐的交错 PCM16 转换并归一化到 `AVAudioPCMBuffer` 的非交错 Float32 声道，避免 320 ms Qwen 音频包逐样本 Swift 循环；未对齐输入保留逐字节兼容路径，并加入有符号极值、多声道顺序与 `<1 ms` 解码门禁。
+- Qwen 打断闭环：用户手动打断、自然 barge-in 与视野注入取消均按上游协议先发送 `playback.cancelled(reason=user_interruption)`、再发送 `interrupt`，让公告在 provider 取消竞态前按用户打断结算而非当作播放错误重试；播放器 reset 改为中断返回前完成的串行屏障，避免界面已停而旧音频仍短暂续播。
+- Qwen 关键打断交付：内置适配器先立即清理本地 playback / response 状态，再让 `interrupt` completion 等待真实 DashScope `response.cancel` 交付；provider 尚未 ready 时不再把旧 cancel 延迟到下一 session，关键控制交付超过 `150 ms` 会关闭并重连当前 socket，超时后的迟到 completion 由一次性 settlement 丢弃。
+- Qwen Provider 重连收敛：Gateway transport 与 realtime provider 生命周期分离；provider unavailable / connecting 期间前台恢复复用现有 WebSocket，不再重复握手或制造第二个 voice owner，并在 provider 恢复后清除旧重连标记、保留上游原始错误信息。
+- Qwen 睡眠 / 唤醒生命周期：对齐上游 `voice.sleep` 语义，`enabled` 只表示唤醒能力就绪，不再误报连接失败；`sleeping` / `waking` 成为一等连接状态，休眠同步停止上传、采集和当前播放，唤醒连接期间保持 waking 优先级并忽略迟到的旧睡眠广播；内置适配器按官方 sleep / wake 事件顺序恢复 provider-ready，主界面与 Live Activity 显示正常待命 / 唤醒状态。
+- Qwen 连接状态归约：内置上游 `main` 的确定性 realtime 状态聚合器，统一执行 `unavailable > sleeping > waking > connected > connecting > disconnected` 优先级；迟到的 ready / connecting / sleep 事件不再覆盖失败、休眠或唤醒状态，明确 provider connecting / connected 仍可解除旧错误并收敛恢复。
+- Qwen 控制面存活：当 `voice.connection=unavailable` 但 Gateway WebSocket 仍存活时，打断、唤醒、静音和播放回执不再被 voice-ready 门禁丢弃；活动播报会回传 `playback.cancelled(reason=playback_error)`，让上游正确释放播放窗口并重试公告。
+- Qwen 高置信快速打断：保留普通语音 `0.02 RMS / 120 ms` 的抗误触窗口，同时为连续 `>=0.12 RMS` 的近讲语音增加 `40 ms` 快速路径；普通能量帧会清空快速累计，避免短爆音跨帧误触。
+- Qwen 采集侧打断快路径：参考 GPT-Live 的全双工媒体面分离，把本地 RMS 与 barge-in 判定前移到原始采集帧接纳时刻，不再等待前一帧 WebSocket send completion；generation-safe capture token 拒绝停播、重连或新回复后的迟到触发。同一 `48 kHz / 20 ms / 960 samples` 输入且发送故意阻塞的确定性基准由 `83.248 ms` 降至 `0.0110 ms`（减少 `99.987%`，约 `7,568x`），并加入 `<10 ms`、陈旧 token 与 disarm 回归门禁。
+- Qwen 音频系统恢复：系统音频中断或媒体服务重置会同步丢弃当前播放、回传 `playback.cancelled(reason=playback_error)` 并销毁失效播放图；保留管线 ingress，使恢复后的下一响应无需重连会话即可重建播放器。
+- Qwen 物理音频路由恢复：蓝牙 / 有线 / USB 音频接入、拔出、睡眠唤醒与系统路由重配会立即失效旧播放并回传 `playback.cancelled(reason=playback_error)`，80 ms 合并通知突发后重建采集 tap；App 自己的 category / output override 不触发恢复环，瞬时重建失败保留 Qwen WebSocket 等待下一路由事件。
+- Qwen 采集自动恢复：路由切换、媒体服务重置或系统中断后的音频图若因系统尚未稳定而首次建图失败，会在保留 Qwen WebSocket 的前提下按 `100 / 250 / 500 ms` 最多重试三次；成功、停止、休眠、新路由或再次中断均以代次取消迟到任务，建图任意阶段失败都会完整清理 engine / tap / upload 状态。
+- Qwen 上行尾延迟约束：WebSocket 音频发送本地交付超过 `250 ms` 即触发当前代失败恢复；内置适配器把 completion 贯通到真实 DashScope send，未 ready 的延迟音频携带单调入队时间，超过 `120 ms` 不再下发 provider，关闭时也以错误释放；发送阻塞期间 mailbox 中超过 `120 ms` 的麦克风帧会在 PCM 编码前丢弃并单独计数，避免弱网恢复后重放陈旧语音，迟到发送回调仍由代次 token 隔离。
+- Qwen 上行低延迟：48 kHz→16 kHz PCM16 编码复用输入 / 输出 `AVAudioPCMBuffer`，并在写入 PCM 时同步累计 RMS，去掉每个约 20 ms 音频帧的重复分配和二次扫描；删除启动时无意义的空 drain，避免其与音频 tap try-lock 竞争丢失首帧。新增 capture→sender `20 ms` 预算、重采样每帧 `0.35 ms` 预算、稳态零音频缓冲分配和 50 代立即首帧零丢失门禁。
 - App Schema 系统意图：`assistant.activate`（iOS 26.2+）把 Lucky 语音会话接入系统激活场景（侧键 / Siri AI）；reminders 域（iOS 27.0+）`createReminder` / `createList` 对齐 Apple Intelligence Schema（清单 / 提醒 / 分组 / 位置触发实体 + `listType` / `locationTriggerEvent` 枚举，`DateComponents` / `Set<String>` / `Calendar.RecurrenceRule` / `CLPlacemark` 类型与必填属性全对齐）直接落 `AgentReminderStore` / `AgentListStore`（重复规则映射、备注 / 标签 / 链接并入、默认 1 小时后提醒、系统通知调度），Siri 对话给出成功 / 失败明确反馈；业务层存储与调度注入可测。
 - Hermes 接入：OpenAI Responses 协议对话（图片携带、流式输出、工具调用回调），网关/密钥配置。
 - 长期记忆与规则：随请求注入所有 Agent（`AgentSystemPromptBuilder`），语音/设置页维护。
@@ -429,12 +452,12 @@
 
 ### 新增：JARVIS 触发中心（Wearable Trigger Hub）
 
-- 统一触发事件模型与路由：眼镜物理触发（镜腿单击/长按经 DAT 会话状态推断）、镜片菜单（Display onTap）、Mock 模拟镜腿、iPhone 背部轻点 / 操作按钮 / Siri / 快捷指令（App Intent）、通用 URL（`hypermetaai://trigger?gesture=wake`）、App 内演示——全部收敛到 `AgentWearableTriggerCenter` 同一路由与审计日志。
-- 去抖防双触发：同一来源同一手势 0.8s 内重复触发自动忽略（防 Back Tap 与镜片双触发）；无活动会话时 interrupt/resume/endTurn/repeat 返回「已忽略」；`AgentWearableTriggerRouter` 纯逻辑可测。
+- 统一触发事件模型与路由：眼镜物理触发（镜腿单击开始/再次单击结束、长按结束，经 DAT 会话状态推断）、镜片菜单（Display onTap）、Mock 模拟镜腿、iPhone 背部轻点 / 操作按钮 / Siri / 快捷指令（App Intent）、通用 URL（`hypermetaai://trigger?gesture=wake`）、App 内演示——全部收敛到 `AgentWearableTriggerCenter` 同一路由与审计日志。
+- 去抖防双触发：同一来源同一手势 0.8s 内重复触发自动忽略（防 Back Tap 与镜片双触发）；无活动会话时 endTurn/repeat 返回「已忽略」；双击与物理快门事件记录为 SDK 不支持；`AgentWearableTriggerRouter` 纯逻辑可测。
 - 触发日志：每次触发（来源 · 手势 · 结果 · 时间）持久化到 `AgentWearableLogStore`（上限 50 条），外设中心展示相对时间文案，`AgentWearableLogFormatter` 纯逻辑可测。
 - 「触发 JARVIS」App Intent（`WearableTriggerAppIntent`）：动作参数化（唤醒 / 打断 / 恢复 / 结束回合 / 拍照识图 / 重听回复），背部轻点与操作按钮绑定快捷指令即可在任何界面唤醒 JARVIS；重听回复经 NotificationCenter 由语音页 / 聊天页消费，与镜片 Repeat 共用实现。
 - 外设中心页（设置 → 设备管理）：眼镜连接状态卡、演示触发（与真实触发同路由）、Apple 原生触发源配置引导（背部轻点 / 操作按钮 / Siri / 快捷指令）、触发日志（一键清空）。
-- 研究结论沉淀：`docs/MetaRaybanTriggers.md` 记录 DAT SDK v0.8.0 触发事件边界（可拿到：会话状态 / 相机 / Display onTap / Mock captouch；拿不到：原始镜腿与快门事件）与 Apple 原生替代触发映射。
+- 研究结论沉淀：`docs/MetaRaybanTriggers.md` 记录 DAT SDK v0.9.0 触发事件边界（可拿到：会话状态 / 相机 / Display onTap / Mock captouch；拿不到：原始镜腿、双击与快门事件）与 Apple 原生替代触发映射。
 
 ### 新增：智能家居管家（HomeKit）
 
@@ -442,9 +465,9 @@
 - 保守解析防误吞：目标必须含家居关键词（灯 / 开关 / 空调 / 房间名等 24 词），「打开App / 打开微信」不会命中；`AgentHomeKitCommandParser` / `AgentHomeKitTargetMatcher`（设备名 / 房间名 / 尾缀归一模糊匹配，可多设备） / `AgentHomeKitFormatter` / `AgentHomeKitExecutor`（亮暗相对计算、全屋过滤门锁与未知类型）纯逻辑可测。
 - HomeKit 自 iOS 11 起无需 entitlement，仅补 Info.plist `NSHomeKitUsageDescription`；`HMHomeManager` 走 `AgentHomeKitProviding` 协议注入（测试用 Mock），`HomeKitHomeService` 映射灯 / 开关 / 空调 / 风扇 / 插座 / 门锁 / 未知七类配件与电源 / 亮度 / 温度 / 锁状态特征。
 
-### 新增：Qwen 语音前端 2.0（内置 qwen-audio-agent v1.8 最新实现）
+### 新增：Qwen 语音前端 2.0（内置 qwen-audio-agent v1.10.1 最新稳定实现）
 
-- 实时语音模型档案升级（镜像 `shared/realtime-provider-catalog.mjs` v1.8.3）：默认 `qwen-audio-3.0-realtime-plus`（纯语音、低延迟），可选 `qwen-audio-3.0-realtime-flash` / `qwen3.5-omni-flash-realtime` / `qwen3.5-omni-plus-realtime`（多模态图像输入），旧 `qwen3-omni-flash-realtime` 仅保留兼容；未知模型 ID 一律回退默认，`QwenRealtimeModelCatalog` 纯逻辑可测。
+- 实时语音模型档案升级（镜像 `shared/realtime-model-catalog.mjs` v1.10.1）：默认 `qwen-audio-3.0-realtime-plus`，可选 `qwen-audio-3.0-realtime-flash` / `qwen3.5-omni-flash-realtime` / `qwen3.5-omni-plus-realtime`；Audio 默认 `longanqian + smart_turn`，Omni 默认 `Ethan + semantic_vad`，两族音色覆盖独立；适配 Omni 服务端替换客户端 conversation item ID 的确认行为。模型能力保留图像标记，但当前 App Realtime 传输仍只开放文本与音频。
 - 网关协议对齐 v1.8：`connect` 携带会话级 `provider` 与 `wakeWordOnly`（仅唤醒模式）、新增客户端 `sleep` / `wake` 事件、解析服务端 `client.state`（sleeping → 进入休眠等待唤醒）；`QwenGatewayService.requestSleep() / requestWake()`。
 - 语音唤醒词（JARVIS 常驻）：会话休眠后由 App 原生监听 iPhone 麦克风（Speech framework 中文识别，对应桌面版网关侧 sherpa-onnx 监听），说「你好千问」自动唤醒并恢复聆听；`QwenWakeWordMatcher`（归一化变体匹配）与 `QwenWakeSessionController`（idle→sleeping→listening→waking 状态机，监听启动失败回落）纯逻辑可测，监听器协议化可注入 Mock。
 - iOS 原生交互：语音页新增「语音唤醒词」开关与休眠/唤醒状态卡（聆听波形 + 实时转写 + 一键唤醒/休眠），网关配置页新增「Qwen 语音前端」模型选择（Audio 纯语音 / Omni 多模态分组）；Omni 实时直连默认升级到 `qwen3.5-omni-flash-realtime`（用户选 Audio 家族时自动回退 Omni 默认，保住传图能力）。
