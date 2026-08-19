@@ -1,6 +1,6 @@
 /*
  * Agent Gateway Models
- * 内置网关（对齐 qwen-audio-agent v1.8.3 server/src）的核心数据模型：
+ * 内置网关（兼容 qwen-audio-agent v1.10.1 server/src）的核心数据模型：
  *   - 非阻塞工作单元（spawn_thinking 语义）：受理立即返回，后台 FIFO 执行
  *   - 协调协议结果：state / mode / presentation（speech + inline）
  * 纯值模型，便于单元测试。

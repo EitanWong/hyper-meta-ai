@@ -1,6 +1,6 @@
 /*
  * Agent Gateway Announcement Window
- * 对齐 qwen-audio-agent v1.8.3 server/src/voice/announcement/announcement-window.mjs：
+ * 兼容 qwen-audio-agent v1.10.1 server/src/voice/announcement/announcement-window.mjs：
  * 跟踪用户说话 / 回合挂起 / 音频响应队列，判断后台结果公告的安全插入窗口。
  * 纯状态机，可测。
  */

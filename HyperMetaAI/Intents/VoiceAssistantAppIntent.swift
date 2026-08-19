@@ -11,6 +11,7 @@ import AppIntents
 
 enum AgentBrainOption: String, AppEnum {
     case auto
+    case none
     case qwen
     case hermes
     case openclaw
@@ -20,6 +21,7 @@ enum AgentBrainOption: String, AppEnum {
     static var caseDisplayRepresentations: [AgentBrainOption: DisplayRepresentation] {
         [
             .auto: "Auto",
+            .none: "agent.brain.none",
             .qwen: "Qwen",
             .hermes: "Hermes",
             .openclaw: "OpenClaw"
@@ -29,6 +31,7 @@ enum AgentBrainOption: String, AppEnum {
     var agentBrain: AgentBrain {
         switch self {
         case .auto: return .auto
+        case .none: return .none
         case .qwen: return .qwen
         case .hermes: return .hermes
         case .openclaw: return .openclaw

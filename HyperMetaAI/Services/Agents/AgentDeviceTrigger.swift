@@ -1,9 +1,8 @@
 /*
  * Agent Device Trigger
- * 把眼镜物理触发（镜腿单击/长按）映射为 Agent 交互事件。
- * DAT SDK 不暴露原始 captouch 事件，只以会话状态变化呈现：
- *   单击 = 会话 paused/resumed，长按 = 会话 stopped。
- * 本模块把会话状态流翻译成 Agent 层可消费的触发事件。
+ * 把眼镜物理触发映射为 Agent 交互事件。
+ * DAT SDK 不暴露原始 captouch 回调，只以会话状态变化呈现；App 只保留
+ * 一个简单的会话开关：第一次触控开始，下一次触控结束。暂停不是 App 状态。
  */
 
 import Foundation
@@ -12,10 +11,10 @@ import UIKit
 
 /// 眼镜物理触发 → Agent 交互事件
 enum AgentDeviceTrigger: Equatable {
-    /// 镜腿单击：会话被暂停（映射为“打断/静音”）
-    case tapPause
-    /// 镜腿再次单击：会话恢复（映射为“继续”）
-    case tapResume
+    /// 第一次镜腿触控：开始一个 App 会话。
+    case tapStartSession
+    /// 会话中的下一次镜腿触控：结束 App 会话。
+    case tapEndSession
     /// 镜腿长按：会话被停止（映射为“结束当前回合”）
     case longPressStop
 }
@@ -23,7 +22,8 @@ enum AgentDeviceTrigger: Equatable {
 /// 把 DeviceSession 状态流翻译成 AgentDeviceTrigger 的纯逻辑检测器。
 /// 独立成类型以便单元测试，不依赖 DAT 运行时。
 struct AgentDeviceTriggerDetector {
-    private(set) var isSessionPaused = false
+    /// DAT 的 started/paused 状态是硬件会话状态，不暴露为 App 的暂停状态。
+    private(set) var isTouchSessionOpen = false
 
     mutating func consume(
         sessionState: DeviceSessionState,
@@ -32,18 +32,19 @@ struct AgentDeviceTriggerDetector {
         switch sessionState {
         case .paused:
             guard !isAppStopping else { return nil }
-            isSessionPaused = true
-            return .tapPause
+            guard !isTouchSessionOpen else { return nil }
+            isTouchSessionOpen = true
+            return .tapStartSession
         case .started:
-            guard isSessionPaused else { return nil }
-            isSessionPaused = false
-            return .tapResume
+            guard isTouchSessionOpen else { return nil }
+            isTouchSessionOpen = false
+            return .tapEndSession
         case .stopped:
             guard !isAppStopping else {
-                isSessionPaused = false
+                isTouchSessionOpen = false
                 return nil
             }
-            isSessionPaused = false
+            isTouchSessionOpen = false
             return .longPressStop
         case .idle, .starting, .stopping:
             return nil
@@ -53,7 +54,7 @@ struct AgentDeviceTriggerDetector {
     }
 
     mutating func reset() {
-        isSessionPaused = false
+        isTouchSessionOpen = false
     }
 }
 

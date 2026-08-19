@@ -12,6 +12,7 @@ import XCTest
 final class AgentAskBrainOptionTests: XCTestCase {
     func testOptionMapsToAgentBrain() {
         XCTAssertEqual(AgentAskBrainOption.auto.agentBrain, .auto)
+        XCTAssertEqual(AgentAskBrainOption.none.agentBrain, .none)
         XCTAssertEqual(AgentAskBrainOption.hermes.agentBrain, .hermes)
         XCTAssertEqual(AgentAskBrainOption.openclaw.agentBrain, .openclaw)
         XCTAssertEqual(AgentAskBrainOption.custom.agentBrain, .custom)
@@ -74,6 +75,17 @@ final class AgentAskIntentFormatterTests: XCTestCase {
 @MainActor
 final class AgentAskIntentHandlerTests: XCTestCase {
 
+    private let hermesReady = AgentBackendAvailability(
+        openClawReady: false,
+        hermesReady: true,
+        customReady: false
+    )
+    private let allReady = AgentBackendAvailability(
+        openClawReady: true,
+        hermesReady: true,
+        customReady: true
+    )
+
     private func captureSend(
         _ capture: @escaping (String, AgentBrain) -> Void
     ) -> @MainActor (String, AgentBrain, @escaping (String) -> Void, @escaping (String) -> Void) -> Void {
@@ -99,6 +111,7 @@ final class AgentAskIntentHandlerTests: XCTestCase {
         let outcome = await AgentAskIntentHandler.ask(
             message: "介绍一下你自己",
             timeout: 1,
+            availability: hermesReady,
             send: { _, _, onFinal, _ in
                 onFinal("我是 Hyper，你的智能管家。")
             }
@@ -110,6 +123,7 @@ final class AgentAskIntentHandlerTests: XCTestCase {
         let outcome = await AgentAskIntentHandler.ask(
             message: "查一下天气",
             timeout: 1,
+            availability: hermesReady,
             send: { _, _, _, onError in
                 onError("hermes.error.notconnected".localized)
             }
@@ -124,6 +138,7 @@ final class AgentAskIntentHandlerTests: XCTestCase {
         let outcome = await AgentAskIntentHandler.ask(
             message: "慢任务",
             timeout: 0.1,
+            availability: hermesReady,
             send: { _, _, _, _ in }
         )
         XCTAssertEqual(outcome, .timedOut(text: "慢任务"))
@@ -134,6 +149,7 @@ final class AgentAskIntentHandlerTests: XCTestCase {
         let outcome = await AgentAskIntentHandler.ask(
             message: "帮我查一下明天的天气",
             timeout: 1,
+            availability: allReady,
             send: { _, brain, onFinal, _ in
                 receivedBrain = brain
                 onFinal("done")
@@ -148,6 +164,7 @@ final class AgentAskIntentHandlerTests: XCTestCase {
         let outcome = await AgentAskIntentHandler.ask(
             message: "介绍一下你自己",
             timeout: 1,
+            availability: allReady,
             send: { _, brain, onFinal, _ in
                 receivedBrain = brain
                 onFinal("ok")
@@ -167,11 +184,37 @@ final class AgentAskIntentHandlerTests: XCTestCase {
         XCTAssertEqual(outcome, .unavailable(text: "你好"))
     }
 
+    func testAutoWithoutConfiguredBackendIsUnavailable() async {
+        var sendCalled = false
+        let outcome = await AgentAskIntentHandler.ask(
+            message: "帮我查天气",
+            timeout: 1,
+            availability: .none,
+            send: { _, _, _, _ in sendCalled = true }
+        )
+        XCTAssertEqual(outcome, .unavailable(text: "帮我查天气"))
+        XCTAssertFalse(sendCalled)
+    }
+
+    func testExplicitNoBackendIsUnavailable() async {
+        var sendCalled = false
+        let outcome = await AgentAskIntentHandler.ask(
+            message: "你好",
+            brain: .none,
+            timeout: 1,
+            availability: allReady,
+            send: { _, _, _, _ in sendCalled = true }
+        )
+        XCTAssertEqual(outcome, .unavailable(text: "你好"))
+        XCTAssertFalse(sendCalled)
+    }
+
     func testSendOnlyResumesOnce() async {
         var callbacks = 0
         let outcome = await AgentAskIntentHandler.ask(
             message: "先回复再报错",
             timeout: 1,
+            availability: hermesReady,
             send: { _, _, onFinal, onError in
                 onFinal("第一条回复")
                 onError("迟到错误")

@@ -1,6 +1,6 @@
 /*
  * Agent Gateway Work Queue
- * 对齐 qwen-audio-agent v1.8.3 的非阻塞工作队列语义：
+ * 兼容 qwen-audio-agent v1.10.1 的非阻塞工作队列语义：
  *   - 每 owner 一个 FIFO 队列，同一 owner 同时只执行一件工作
  *   - 受理（enqueue）立即返回；spawn_thinking 从不等待工作完成
  *   - 终态工作进入有界历史，便于状态查询与 UI 展示

@@ -16,8 +16,10 @@ import UIKit
 
 /// JARVIS 触发来源（记录到触发日志，供审计展示）
 enum AgentWearableSource: String, CaseIterable, Codable, Equatable {
-    /// 镜腿物理触发（经 DAT 会话状态推断：单击暂停/恢复、长按结束）
+    /// 镜腿物理触发（经 DAT 会话状态推断：单击开始/结束）
     case glassesSession
+    /// 眼镜快门按钮；当前 DAT SDK 没有原始按钮回调，保留为能力审计入口。
+    case glassesCaptureButton
     /// 镜片菜单点击（Display onTap，Display 眼镜）
     case glassesDisplay
     /// 模拟镜腿（Mock 设备，开发 / 演示）
@@ -39,7 +41,7 @@ enum AgentWearableSource: String, CaseIterable, Codable, Equatable {
 
     var iconName: String {
         switch self {
-        case .glassesSession, .glassesDisplay:
+        case .glassesSession, .glassesDisplay, .glassesCaptureButton:
             return "eyeglasses"
         case .mockCaptouch:
             return "hand.tap"
@@ -61,7 +63,7 @@ enum AgentWearableSource: String, CaseIterable, Codable, Equatable {
 
 /// 统一触发手势（与具体来源解耦）
 enum AgentWearableGesture: String, CaseIterable, Codable, Equatable {
-    /// 唤醒 / 开始新回合（空闲时 = 唤醒，活跃时 = 恢复聆听）
+    /// 唤醒 / 开始新回合（空闲时有效）
     case wake
     /// 打断当前输出并静音输入
     case interrupt
@@ -71,6 +73,10 @@ enum AgentWearableGesture: String, CaseIterable, Codable, Equatable {
     case endTurn
     /// 眼镜拍照并把视野送入识图（JARVIS「我眼前是什么」）
     case captureVision
+    /// 直接请求眼镜快门拍照；物理快门仍需系统/Meta 路由转发。
+    case captureButton
+    /// 双击能力登记；当前 DAT SDK 不暴露原始双击回调。
+    case doubleTap
     /// 重听最近一条助手回复
     case repeatLastReply
     /// 模拟镜腿单击（演示 / 测试）
@@ -122,6 +128,7 @@ enum AgentWearableOutcome: Equatable {
         case .dismissMenu: return "dismiss"
         case .ignored(.cooldown): return "ignored.cooldown"
         case .ignored(.noActiveSession): return "ignored.noActiveSession"
+        case .ignored(.unsupportedGesture): return "ignored.unsupportedGesture"
         }
     }
 }
@@ -132,6 +139,51 @@ enum AgentWearableIgnoreReason: Equatable {
     case cooldown
     /// 需要进行中的语音会话，但会话未激活
     case noActiveSession
+    /// 当前 DAT SDK 没有该原始硬件事件回调
+    case unsupportedGesture
+}
+
+// MARK: - 触控能力清单
+
+/// DAT SDK 能观测到的触控表面，独立于 App 的会话命令。
+enum AgentWearableTouchKind: String, CaseIterable, Codable, Equatable, Identifiable {
+    case singleTap
+    case doubleTap
+    case longPress
+    case captureButton
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        "agent.wearable.touch.\(rawValue)".localized
+    }
+}
+
+struct AgentWearableTouchCapability: Equatable, Identifiable {
+    let kind: AgentWearableTouchKind
+    let isAvailable: Bool
+    let detailKey: String
+
+    var id: AgentWearableTouchKind { kind }
+
+    var detail: String { detailKey.localized }
+}
+
+/// 对外展示真实 SDK 的能力边界，避免把 Mock 能力误当成真机回调。
+enum AgentWearableTouchCatalog {
+    static let realGlasses: [AgentWearableTouchCapability] = [
+        .init(kind: .singleTap, isAvailable: true, detailKey: "agent.wearable.touch.detail.singleTap"),
+        .init(kind: .doubleTap, isAvailable: false, detailKey: "agent.wearable.touch.detail.unavailable"),
+        .init(kind: .longPress, isAvailable: true, detailKey: "agent.wearable.touch.detail.longPress"),
+        .init(kind: .captureButton, isAvailable: false, detailKey: "agent.wearable.touch.detail.captureUnavailable")
+    ]
+
+    static let mockCaptouch: [AgentWearableTouchCapability] = [
+        .init(kind: .singleTap, isAvailable: true, detailKey: "agent.wearable.touch.detail.mockTap"),
+        .init(kind: .doubleTap, isAvailable: false, detailKey: "agent.wearable.touch.detail.unavailable"),
+        .init(kind: .longPress, isAvailable: true, detailKey: "agent.wearable.touch.detail.mockHold"),
+        .init(kind: .captureButton, isAvailable: false, detailKey: "agent.wearable.touch.detail.captureUnavailable")
+    ]
 }
 
 // MARK: - 路由（含去抖）
@@ -159,7 +211,7 @@ struct AgentWearableTriggerRouter {
 
         switch gesture {
         case .wake:
-            // 空闲唤醒 / 活跃恢复聆听：QwenVoiceSession.wake() 语义一致
+            // App Intent / URL 的显式唤醒；眼镜触控由 AgentTurnStateMachine 统一决定开始或结束。
             return .turn(.wake)
         case .interrupt:
             return isSessionActive ? .turn(.interrupt) : .ignored(.noActiveSession)
@@ -169,6 +221,10 @@ struct AgentWearableTriggerRouter {
             return isSessionActive ? .turn(.endTurn) : .ignored(.noActiveSession)
         case .captureVision:
             return .captureVision
+        case .captureButton:
+            return .captureVision
+        case .doubleTap:
+            return .ignored(.unsupportedGesture)
         case .repeatLastReply:
             return isSessionActive ? .repeatLastReply : .ignored(.noActiveSession)
         case .mockTap:

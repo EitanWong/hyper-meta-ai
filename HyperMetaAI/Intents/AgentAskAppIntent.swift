@@ -18,6 +18,7 @@ import UserNotifications
 /// Siri 可选的 Agent 大脑（Qwen 原生实时语音不参与后台单轮问答）
 enum AgentAskBrainOption: String, AppEnum {
     case auto
+    case none
     case hermes
     case openclaw
     case custom
@@ -27,6 +28,7 @@ enum AgentAskBrainOption: String, AppEnum {
     static var caseDisplayRepresentations: [AgentAskBrainOption: DisplayRepresentation] {
         [
             .auto: "agent.ask.brain.auto",
+            .none: "agent.ask.brain.none",
             .hermes: "agent.ask.brain.hermes",
             .openclaw: "agent.ask.brain.openclaw",
             .custom: "agent.ask.brain.custom"
@@ -36,6 +38,7 @@ enum AgentAskBrainOption: String, AppEnum {
     var agentBrain: AgentBrain {
         switch self {
         case .auto: return .auto
+        case .none: return .none
         case .hermes: return .hermes
         case .openclaw: return .openclaw
         case .custom: return .custom
@@ -93,11 +96,11 @@ enum AgentAskGateway {
         onError: @escaping (String) -> Void
     ) {
         switch brain {
-        case .auto, .qwen:
+        case .auto, .none, .qwen:
             onError("agent.ask.intent.unavailable".localized)
         case .hermes, .openclaw, .custom:
             // 内置网关协调语义：协调提示词 + 协议重试 + 最终语音（presentation.speech），
-            // 与后台工作队列共用同一套 qwen_audio_agent_protocol（v1.8.3）。
+            // 与后台工作队列共用同一套 qwen_audio_agent_protocol（兼容 v1.10.1）。
             AgentGatewayService.shared.runSingleTurn(text, brain: brain) { result in
                 switch result {
                 case .success(let decision):
@@ -126,6 +129,7 @@ enum AgentAskIntentHandler {
         message: String,
         brain: AgentBrain = .auto,
         timeout: TimeInterval = 40,
+        availability: AgentBackendAvailability? = nil,
         send: (
             @MainActor (String, AgentBrain, @escaping (String) -> Void, @escaping (String) -> Void) -> Void
         ) = { text, brain, onFinal, onError in
@@ -135,8 +139,12 @@ enum AgentAskIntentHandler {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .empty(text: message) }
 
-        let resolved = AgentBrainRouter.resolvedBrain(trimmed, selection: brain)
-        guard resolved != .qwen else {
+        let resolved = AgentBrainRouter.resolvedBrain(
+            trimmed,
+            selection: brain,
+            availability: availability
+        )
+        guard resolved.isConcreteBackend else {
             return .unavailable(text: trimmed)
         }
 

@@ -64,7 +64,7 @@ final class AgentGatewayService: ObservableObject {
         BackendExecutor { prompt, brain, completion in
             let resolved = AgentBrainRouter.resolvedBrain(prompt, selection: brain)
             switch resolved {
-            case .auto, .qwen:
+            case .auto, .none, .qwen:
                 completion(AgentGatewayRunResult(
                     content: "",
                     failed: true,
@@ -150,18 +150,24 @@ final class AgentGatewayService: ObservableObject {
             onError?(.emptyObjective)
             return nil
         }
+        let resolvedBrain = AgentBrainRouter.resolvedBrain(trimmed, selection: brain)
+        guard resolvedBrain.isConcreteBackend else {
+            // 对齐上游 frontend-only：无后台时不创建一个注定失败的任务。
+            onError?(.backendUnavailable)
+            return nil
+        }
         let work = AgentGatewayWork(owner: owner, objective: trimmed)
         guard queue.accept(work) else {
             onError?(.queueFull)
             return nil
         }
-        workBrains[work.id] = brain
+        workBrains[work.id] = resolvedBrain
         syncPublishedWorks()
         if let accepted = queue.work(id: work.id) {
             onWorkEvent?(accepted)
         }
         Task { @MainActor [weak self] in
-            self?.pump(brain: brain)
+            self?.pump(brain: resolvedBrain)
         }
         return queue.work(id: work.id)
     }
@@ -218,6 +224,11 @@ final class AgentGatewayService: ObservableObject {
         context: AgentGatewayRunContext = AgentGatewayRunContext(),
         completion: @escaping (Result<AgentGatewayDecision, AgentGatewayError>) -> Void
     ) {
+        let resolvedBrain = AgentBrainRouter.resolvedBrain(text, selection: brain)
+        guard resolvedBrain.isConcreteBackend else {
+            completion(.failure(.backendUnavailable))
+            return
+        }
         let runId = UUID().uuidString
         let prompt = AgentGatewayCoordinatorPromptBuilder.build(
             originalRequest: text,
@@ -227,7 +238,11 @@ final class AgentGatewayService: ObservableObject {
         )
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let result = await self.executeCoordinated(prompt: prompt, runId: runId, brain: brain)
+            let result = await self.executeCoordinated(
+                prompt: prompt,
+                runId: runId,
+                brain: resolvedBrain
+            )
             completion(result)
         }
     }
