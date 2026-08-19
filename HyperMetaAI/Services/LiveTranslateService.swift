@@ -25,6 +25,10 @@ class LiveTranslateService: NSObject {
 
     // Audio Engine (for recording)
     private var audioEngine: AVAudioEngine?
+    private let audioControlQueue = DispatchQueue(
+        label: "com.lunflux.hyper-meta-ai.translate.audio-control",
+        qos: .userInitiated
+    )
     private let audioUploadPipeline = RealtimeAudioUploadPipeline(
         label: "com.lunflux.hyper-meta-ai.translate.audio-upload",
         targetSampleRate: RealtimeProviderAudioProfiles.qwen.inputSampleRate
@@ -116,8 +120,10 @@ class LiveTranslateService: NSObject {
         webSocket = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
-        stopRecording()
-        AudioSessionCoordinator.shared.deactivate(.liveTranslate)
+        audioControlQueue.async { [weak self] in
+            self?.stopRecordingOnAudioControlQueue()
+            AudioSessionCoordinator.shared.deactivate(.liveTranslate)
+        }
     }
 
     private func beginRealtimeSession() -> Int {
@@ -197,6 +203,12 @@ class LiveTranslateService: NSObject {
     // MARK: - Audio Recording
 
     func startRecording(usePhoneMic: Bool = false) {
+        audioControlQueue.async { [weak self] in
+            self?.startRecordingOnAudioControlQueue(usePhoneMic: usePhoneMic)
+        }
+    }
+
+    private func startRecordingOnAudioControlQueue(usePhoneMic: Bool) {
         guard !isRecording else { return }
 
         do {
@@ -227,6 +239,7 @@ class LiveTranslateService: NSObject {
                 return
             }
 
+            try AppleVoiceAudioFrontEnd.configure(engine)
             let inputNode = engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
 
@@ -275,6 +288,12 @@ class LiveTranslateService: NSObject {
     }
 
     func stopRecording() {
+        audioControlQueue.async { [weak self] in
+            self?.stopRecordingOnAudioControlQueue()
+        }
+    }
+
+    private func stopRecordingOnAudioControlQueue() {
         audioUploadGeneration &+= 1
         audioUploadPipeline.stop()
         guard isRecording else { return }

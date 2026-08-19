@@ -22,6 +22,10 @@ class GeminiLiveService: NSObject {
 
     // Audio Engine (for recording)
     private var audioEngine: AVAudioEngine?
+    private let audioControlQueue = DispatchQueue(
+        label: "com.lunflux.hyper-meta-ai.gemini.audio-control",
+        qos: .userInitiated
+    )
     private let audioUploadPipeline = RealtimeAudioUploadPipeline(
         label: "com.lunflux.hyper-meta-ai.gemini.audio-upload",
         targetSampleRate: 16_000
@@ -122,8 +126,10 @@ class GeminiLiveService: NSObject {
         webSocket = nil
         urlSession?.invalidateAndCancel()
         urlSession = nil
-        stopRecording()
-        AudioSessionCoordinator.shared.deactivate(.liveAI)
+        audioControlQueue.async { [weak self] in
+            self?.stopRecordingOnAudioControlQueue()
+            AudioSessionCoordinator.shared.deactivate(.liveAI)
+        }
         isSessionConfigured = false
     }
 
@@ -189,6 +195,12 @@ class GeminiLiveService: NSObject {
     // MARK: - Audio Recording
 
     func startRecording() {
+        audioControlQueue.async { [weak self] in
+            self?.startRecordingOnAudioControlQueue()
+        }
+    }
+
+    private func startRecordingOnAudioControlQueue() {
         guard !isRecording else { return }
 
         do {
@@ -233,6 +245,7 @@ class GeminiLiveService: NSObject {
                 return
             }
 
+            try AppleVoiceAudioFrontEnd.configure(engine)
             let inputNode = engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
 
@@ -281,6 +294,12 @@ class GeminiLiveService: NSObject {
     }
 
     func stopRecording() {
+        audioControlQueue.async { [weak self] in
+            self?.stopRecordingOnAudioControlQueue()
+        }
+    }
+
+    private func stopRecordingOnAudioControlQueue() {
         audioUploadGeneration &+= 1
         audioUploadPipeline.stop()
         guard isRecording else { return }

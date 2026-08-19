@@ -280,7 +280,7 @@ class OpenClawCommandRouter {
                 "deviceType": .string("Ray-Ban Meta"),
                 "appName": .string(AppIdentity.displayName),
                 "appVersion": .string(appVersion),
-                "sdkVersion": .string("0.8.0"),
+                "sdkVersion": .string("0.9.0"),
                 "platform": .string("iOS"),
                 "osVersion": .string(UIDevice.current.systemVersion)
             ],
