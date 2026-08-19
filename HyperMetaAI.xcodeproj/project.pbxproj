@@ -12,7 +12,6 @@
 		26664DE8308E3F2981609421 /* QuickVisionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA3E36CE337855A7F17F2AC8 /* QuickVisionService.swift */; };
 		2746170F50E225008AB717CE /* QuickVisionModeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 51A08DC107E5A57DDE6036C3 /* QuickVisionModeManager.swift */; };
 		2D194F19524B5A74AAA4F325 /* GeminiLiveService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63EB4C91D8E0C8AC944DF95A /* GeminiLiveService.swift */; };
-		3121D19C06DC68008799365A /* LiveAIIntent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C0ECA1D14EBBE33F66EEF18 /* LiveAIIntent.swift */; };
 		4B69CCC32F050D4300D1D025 /* RTMPStreamingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B69CCC22F050D4300D1D025 /* RTMPStreamingView.swift */; };
 		4B69CCC52F050D5200D1D025 /* RTMPStreamingViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B69CCC42F050D5200D1D025 /* RTMPStreamingViewModel.swift */; };
 		4B69CCC72F050D5D00D1D025 /* RTMPStreamingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B69CCC62F050D5D00D1D025 /* RTMPStreamingService.swift */; };
@@ -337,7 +336,6 @@
 		4BB5DFF22F06C07A00AF7BD0 /* LiveAISettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAISettingsView.swift; sourceTree = "<group>"; };
 		51A08DC107E5A57DDE6036C3 /* QuickVisionModeManager.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = QuickVisionModeManager.swift; path = Managers/QuickVisionModeManager.swift; sourceTree = "<group>"; };
 		568E19B82D2116C7FE3B1829 /* QuickVisionIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QuickVisionIntent.swift; sourceTree = "<group>"; };
-		5C0ECA1D14EBBE33F66EEF18 /* LiveAIIntent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = LiveAIIntent.swift; sourceTree = "<group>"; };
 		63EB4C91D8E0C8AC944DF95A /* GeminiLiveService.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = GeminiLiveService.swift; sourceTree = "<group>"; };
 		6B037E0156E90DE2314A9F47 /* QuickVisionView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = QuickVisionView.swift; sourceTree = "<group>"; };
 		8FD96B772E6F0A9800F56AB1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -548,7 +546,6 @@
 			isa = PBXGroup;
 			children = (
 				568E19B82D2116C7FE3B1829 /* QuickVisionIntent.swift */,
-				5C0ECA1D14EBBE33F66EEF18 /* LiveAIIntent.swift */,
 				WT2000000000000000000002 /* WearableTriggerAppIntent.swift */,
 				AG2013001300130013 /* VoiceAssistantAppIntent.swift */,
 				LT10020002000200020002 /* LocalToolsAppIntent.swift */,
@@ -1242,7 +1239,6 @@
 				6FE225749B8E795D8D265971 /* QuickVisionStorage.swift in Sources */,
 				2746170F50E225008AB717CE /* QuickVisionModeManager.swift in Sources */,
 				5F1DD829120116C2EB177411 /* QuickVisionSettingsView.swift in Sources */,
-				3121D19C06DC68008799365A /* LiveAIIntent.swift in Sources */,
 				4BB5DFF12F06C06D00AF7BD0 /* LiveAIModeManager.swift in Sources */,
 				759D8C3F84F44478678CA613 /* LiveAIManager.swift in Sources */,
 				LT0001000100010001 /* LiveTranslateModels.swift in Sources */,
