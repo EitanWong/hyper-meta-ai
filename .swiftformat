@@ -1,0 +1,61 @@
+# SwiftFormat configuration for Hyper Meta AI.
+#
+# This config describes the style the codebase already uses, so that running
+# `swiftformat .` on a clean checkout is close to a no-op. A formatter that
+# produces a 20,000-line diff on first run gets turned off instead of adopted,
+# so anything that would mass-rewrite existing code is disabled below with a
+# note on what it would take to turn on.
+#
+# Options are deliberately few. Every one listed here was checked against
+# SwiftFormat's own option definitions; unset options keep their defaults rather
+# than being spelled out speculatively.
+
+--swiftversion 5.10
+--exclude build,DerivedData,.build,HyperMetaAI/Generated
+
+# 196 of 276 files indent with 4 spaces, 80 with 2. Unifying is mechanical but
+# touches nearly every file, so `indent` stays off until that is done as its own
+# commit. Enabling it here would mix reformatting into every future diff.
+--disable indent
+
+# Matches the existing wrapping style: 88 lines exceed 120 characters today,
+# mostly long Chinese comments and DAT SDK call chains.
+--maxwidth 140
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--closingparen balanced
+--funcattributes prev-line
+--typeattributes prev-line
+
+--self remove
+--semicolons never
+
+# 1,200 multi-line lists end without a trailing comma against 53 that have one.
+# SwiftFormat defaults to `always`, which would rewrite all 1,200, so pin it to
+# match the code. This also keeps it consistent with SwiftLint's trailing_comma.
+--trailingcommas never
+--importgrouping testable-last
+--trimwhitespace always
+--stripunusedargs closure-only
+--header ignore
+--elseposition same-line
+--guardelse auto
+--shortoptionals always
+
+# `// MARK:` sections organise the large view files; do not reflow them.
+--disable blankLinesAroundMark
+
+# The audio pipeline uses explicit `return` in short closures where it clarifies
+# which branch produces the value.
+--disable redundantReturn
+
+# Collapsing if/else chains into a single assignment obscures the realtime state
+# transitions in the voice path, where each branch is read on its own.
+--disable conditionalAssignment
+
+--enable isEmpty
+--enable blockComments
+--enable redundantOptionalBinding
+--enable sortImports
+--enable wrapMultilineStatementBraces

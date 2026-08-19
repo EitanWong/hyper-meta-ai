@@ -40,6 +40,18 @@ jobs:
           bash -n Scripts/profile-ios-video-pipeline.sh
           bash -n Scripts/check-qwen-audio-agent-sync.sh
           bash -n Scripts/check-meta-wearables-sdk.sh
+          bash -n Scripts/scan-unused-code.sh
+
+      # A malformed lint config makes the macOS lint job fail for the wrong
+      # reason, so validate the YAML here where it is cheap.
+      - name: Check tooling configuration is parseable
+        run: |
+          python3 -c "import yaml,sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]" \
+            .swiftlint.yml \
+            .periphery.yml \
+            .github/workflows/repository-checks.yml \
+            .github/workflows/swift-lint.yml \
+            .github/workflows/qwen-audio-agent-sync.yml
 
       - name: Verify Qwen Audio Agent compatibility baseline
         run: ./Scripts/check-qwen-audio-agent-sync.sh

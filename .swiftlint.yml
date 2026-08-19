@@ -1,0 +1,136 @@
+# SwiftLint configuration for Hyper Meta AI.
+#
+# Thresholds are set from the code as it actually is today, not from SwiftLint's
+# defaults, and no rule is set to `error` severity unless the codebase already
+# passes it. That is deliberate: CI fails the build on errors only, so a config
+# that errors on pre-existing debt gets bypassed rather than fixed.
+#
+# Size limits are therefore warnings that sit *below* the current worst case, so
+# they show the backlog and stop it growing, rather than being raised to whatever
+# the largest file happens to be. Each one notes what has to happen before it can
+# be promoted to an error.
+
+included:
+  - HyperMetaAI
+  - HyperMetaAITests
+
+excluded:
+  - build
+  - DerivedData
+  - .build
+  - HyperMetaAI/Generated
+
+disabled_rules:
+  # SwiftUI view bodies are deeply nested by nature; this rule fires on every
+  # non-trivial view and drowns out real findings.
+  - function_body_length
+  # The project uses `// MARK:` sections rather than one type per file in the
+  # view layer. Revisit once the large views are split.
+  - file_types_order
+  - todo
+
+opt_in_rules:
+  - array_init
+  - closure_end_indentation
+  - closure_spacing
+  - collection_alignment
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - discouraged_optional_boolean
+  - empty_collection_literal
+  - empty_count
+  - empty_string
+  - explicit_init
+  - fallthrough
+  - first_where
+  - flatmap_over_map_reduce
+  - identical_operands
+  - joined_default_parameter
+  - last_where
+  - legacy_multiple
+  - literal_expression_end_indentation
+  - lower_acl_than_parent
+  - modifier_order
+  - operator_usage_whitespace
+  - overridden_super_call
+  - prefer_zero_over_explicit_init
+  - private_action
+  - private_outlet
+  - redundant_nil_coalescing
+  - redundant_type_annotation
+  - sorted_first_last
+  - toggle_bool
+  - unavailable_function
+  - unneeded_parentheses_in_closure_argument
+  - unowned_variable_capture
+  - untyped_error_in_catch
+  - vertical_parameter_alignment_on_call
+  - yoda_condition
+
+# `analyzer_rules` (unused_declaration, unused_import) are deliberately omitted.
+# They only run under `swiftlint analyze`, which needs a full xcodebuild log, and
+# Periphery already covers unused declarations with better handling of
+# system-invoked entry points. See .periphery.yml.
+
+# 88 lines exceed 120 characters and 18 exceed 160, mostly long Chinese comments
+# and DAT SDK call chains, so warn at 140 rather than the default 120. The 11
+# lines past 200 characters are all interpolated os_log metric strings, which
+# `ignores_interpolated_strings` exempts anyway.
+line_length:
+  warning: 140
+  ignores_comments: true
+  ignores_urls: true
+  ignores_function_declarations: true
+  ignores_interpolated_strings: true
+
+# Size rules are warning-only on purpose. The largest file is 3,778 lines and the
+# largest type body is 3,542 (QwenVoiceView), so any error threshold low enough to
+# be meaningful would fail CI on existing code. These warnings exist to make the
+# backlog visible and to stop it growing; they become errors once the big views
+# and view models are split.
+file_length:
+  warning: 800
+  ignore_comment_only_lines: true
+
+type_body_length:
+  warning: 500
+
+large_tuple:
+  warning: 3
+
+nesting:
+  type_level: 2
+  function_level: 4
+
+cyclomatic_complexity:
+  warning: 15
+
+identifier_name:
+  min_length: 2
+  excluded:
+    - id
+    - ms
+    - to
+    - up
+    - x
+    - y
+    - z
+
+type_name:
+  min_length: 3
+  max_length: 55
+
+# Warnings, not errors. There is exactly one `as!` in app code — the standard
+# `layerClass` / `displayLayer` pairing in VideoFrameRenderer, where the cast is
+# guaranteed by the layer class itself — and the 10 `try!` uses are all in tests
+# where a throw should fail the test anyway. A hard error would be a gate that
+# fails on day one for two defensible cases; promote these once the app-code
+# occurrence is gone.
+force_cast: warning
+force_try: warning
+
+trailing_comma:
+  mandatory_comma: false
+
+reporter: xcode
