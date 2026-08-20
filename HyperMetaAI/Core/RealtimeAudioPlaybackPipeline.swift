@@ -4,6 +4,7 @@
  * AVAudioEngine plus AVAudioPlayerNode for each realtime service instance.
  */
 
+import Accelerate
 import AVFoundation
 import Foundation
 import os
@@ -367,6 +368,8 @@ struct RealtimeAudioPlaybackPerformanceSnapshot: Equatable, Sendable {
     maximumScheduledFrames: 0,
     averageDecodeMilliseconds: 0,
     maximumDecodeMilliseconds: 0,
+    averageReceiveToScheduleMilliseconds: 0,
+    maximumReceiveToScheduleMilliseconds: 0,
     averageScheduleToPlaybackMilliseconds: 0,
     maximumScheduleToPlaybackMilliseconds: 0
   )
@@ -398,6 +401,8 @@ struct RealtimeAudioPlaybackPerformanceSnapshot: Equatable, Sendable {
   let maximumScheduledFrames: Int
   let averageDecodeMilliseconds: Double
   let maximumDecodeMilliseconds: Double
+  let averageReceiveToScheduleMilliseconds: Double
+  let maximumReceiveToScheduleMilliseconds: Double
   let averageScheduleToPlaybackMilliseconds: Double
   let maximumScheduleToPlaybackMilliseconds: Double
 
@@ -437,6 +442,9 @@ private struct RealtimeAudioPlaybackMetricsWindow {
   var decodeSamples = 0
   var decodeTotalMilliseconds = 0.0
   var decodeMaximumMilliseconds = 0.0
+  var receiveToScheduleSamples = 0
+  var receiveToScheduleTotalMilliseconds = 0.0
+  var receiveToScheduleMaximumMilliseconds = 0.0
   var playbackSamples = 0
   var scheduleToPlaybackTotalMilliseconds = 0.0
   var scheduleToPlaybackMaximumMilliseconds = 0.0
@@ -490,14 +498,25 @@ private final class RealtimeAudioPlaybackPerformanceMonitor: @unchecked Sendable
   func recordScheduled(
     queued: RealtimeAudioJitterBufferSnapshot,
     scheduledFrames: Int,
-    decodeDuration: TimeInterval
+    decodeDuration: TimeInterval,
+    receiveToScheduleDuration: TimeInterval
   ) {
     withLock {
-      let milliseconds = max(0, decodeDuration) * 1_000
+      let decodeMilliseconds = max(0, decodeDuration) * 1_000
+      let receiveToScheduleMilliseconds = max(0, receiveToScheduleDuration) * 1_000
       window.scheduledChunks += 1
       window.decodeSamples += 1
-      window.decodeTotalMilliseconds += milliseconds
-      window.decodeMaximumMilliseconds = max(window.decodeMaximumMilliseconds, milliseconds)
+      window.decodeTotalMilliseconds += decodeMilliseconds
+      window.decodeMaximumMilliseconds = max(
+        window.decodeMaximumMilliseconds,
+        decodeMilliseconds
+      )
+      window.receiveToScheduleSamples += 1
+      window.receiveToScheduleTotalMilliseconds += receiveToScheduleMilliseconds
+      window.receiveToScheduleMaximumMilliseconds = max(
+        window.receiveToScheduleMaximumMilliseconds,
+        receiveToScheduleMilliseconds
+      )
       window.maximumQueuedChunks = max(window.maximumQueuedChunks, queued.queuedChunks)
       window.maximumQueuedFrames = max(window.maximumQueuedFrames, queued.queuedFrames)
       window.maximumScheduledFrames = max(window.maximumScheduledFrames, scheduledFrames)
@@ -565,6 +584,11 @@ private final class RealtimeAudioPlaybackPerformanceMonitor: @unchecked Sendable
         samples: window.decodeSamples
       ),
       maximumDecodeMilliseconds: window.decodeMaximumMilliseconds,
+      averageReceiveToScheduleMilliseconds: average(
+        total: window.receiveToScheduleTotalMilliseconds,
+        samples: window.receiveToScheduleSamples
+      ),
+      maximumReceiveToScheduleMilliseconds: window.receiveToScheduleMaximumMilliseconds,
       averageScheduleToPlaybackMilliseconds: average(
         total: window.scheduleToPlaybackTotalMilliseconds,
         samples: window.playbackSamples
@@ -597,6 +621,7 @@ private enum RealtimeAudioPlaybackSignposts {
 final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
   typealias FailureHandler = @MainActor (String) -> Void
   typealias PlaybackCompletionHandler = @MainActor (Int) -> Void
+  typealias AudioLevelHandler = @MainActor (Float) -> Void
 
   private let queue: DispatchQueue
   private let queueKey = DispatchSpecificKey<Void>()
@@ -605,15 +630,19 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
   private let performanceMonitor = RealtimeAudioPlaybackPerformanceMonitor()
   private let minimumStartupFrames: Int
   private let targetScheduledFrames: Int
+  private let schedulingSafetyIntervalMilliseconds: Int
   private let logger: Logger
+  private let engineStartOverride: (@Sendable () -> Bool)?
 
   private var ingressLock = os_unfair_lock_s()
   private var ingressGeneration: Int?
   private var responseIsActive = false
+  private var schedulingWakePending = false
 
   private var playbackEngine: AVAudioEngine?
   private var playerNode: AVAudioPlayerNode?
   private var playbackAudioFormat: AVAudioFormat?
+  private var didStartEngineWithOverride = false
   private var timer: DispatchSourceTimer?
   private var activeGeneration: Int?
   private var activeResponseID: UInt64 = 0
@@ -624,8 +653,18 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
   private var nextScheduleToken: UInt64 = 0
   private var onFailure: FailureHandler?
   private var onResponsePlaybackComplete: PlaybackCompletionHandler?
+  private var onAudioLevel: AudioLevelHandler?
+  private var lastEmittedAudioLevel: Float = 0
+  private var lastAudioLevelEmissionAt: TimeInterval = 0
   private var hasNotifiedResponsePlaybackCompletion = false
   private var lastMetricsReportAt = ProcessInfo.processInfo.systemUptime
+
+  /// Frames confirmed played by `.dataPlayedBack` for the active response.
+  /// Guarded by its own lock rather than the playback queue so the barge-in
+  /// path can read it without a `queue.sync` barrier.
+  private var playedFramesLock = os_unfair_lock_s()
+  private var playedFramesForActiveResponse = 0
+  private var playedFramesSampleRate: Double = 0
   #if DEBUG
   private var hasLoggedFirstScheduledBuffer = false
   private var hasLoggedFirstPlayedBuffer = false
@@ -639,11 +678,14 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     maximumBufferedResponseMilliseconds: Double? = nil,
     maximumBufferedResponseChunks: Int? = nil,
     responseBufferOverflowPolicy: RealtimeAudioJitterOverflowPolicy = .replaceOldest,
-    targetScheduledMilliseconds: Double = 80
+    targetScheduledMilliseconds: Double = 80,
+    schedulingSafetyIntervalMilliseconds: Int = 20,
+    engineStartOverride: (@Sendable () -> Bool)? = nil
   ) {
     self.outputFormat = outputFormat
     minimumStartupFrames = max(1, Int(outputFormat.sampleRate * startupBufferMilliseconds / 1_000))
     targetScheduledFrames = max(1, Int(outputFormat.sampleRate * targetScheduledMilliseconds / 1_000))
+    self.schedulingSafetyIntervalMilliseconds = max(1, schedulingSafetyIntervalMilliseconds)
     let maximumBufferedMilliseconds = max(
       maximumJitterMilliseconds,
       maximumBufferedResponseMilliseconds ?? maximumJitterMilliseconds
@@ -655,6 +697,7 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     )
     queue = DispatchQueue(label: label, qos: .userInitiated)
     logger = Logger(subsystem: AppIdentity.loggingSubsystem, category: "RealtimeAudioPlayback")
+    self.engineStartOverride = engineStartOverride
     queue.setSpecific(key: queueKey, value: ())
   }
 
@@ -665,13 +708,15 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
   func start(
     generation: Int,
     onFailure: @escaping FailureHandler,
-    onResponsePlaybackComplete: @escaping PlaybackCompletionHandler = { _ in }
+    onResponsePlaybackComplete: @escaping PlaybackCompletionHandler = { _ in },
+    onAudioLevel: @escaping AudioLevelHandler = { _ in }
   ) {
     withIngressLock {
       ingressGeneration = generation
       responseIsActive = false
+      schedulingWakePending = false
+      _ = jitterBuffer.activate(generation: generation)
     }
-    _ = jitterBuffer.activate(generation: generation)
 
     synchronouslyOnQueue {
       resetPlayer(stopEngine: true)
@@ -683,8 +728,12 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
       scheduledBuffers.removeAll(keepingCapacity: true)
       self.onFailure = onFailure
       self.onResponsePlaybackComplete = onResponsePlaybackComplete
+      self.onAudioLevel = onAudioLevel
+      lastEmittedAudioLevel = 0
+      lastAudioLevelEmissionAt = 0
       hasNotifiedResponsePlaybackCompletion = false
       lastMetricsReportAt = ProcessInfo.processInfo.systemUptime
+      resetPlayedFrames()
       #if DEBUG
       hasLoggedFirstScheduledBuffer = false
       hasLoggedFirstPlayedBuffer = false
@@ -696,9 +745,11 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     withIngressLock {
       ingressGeneration = nil
       responseIsActive = false
+      schedulingWakePending = false
+      _ = jitterBuffer.deactivateAndClear()
     }
-    _ = jitterBuffer.deactivateAndClear()
 
+    var levelHandler: AudioLevelHandler?
     synchronouslyOnQueue {
       activeGeneration = nil
       activeResponseID = 0
@@ -708,13 +759,21 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
       scheduledBuffers.removeAll(keepingCapacity: true)
       onFailure = nil
       onResponsePlaybackComplete = nil
+      levelHandler = onAudioLevel
+      onAudioLevel = nil
+      lastEmittedAudioLevel = 0
+      lastAudioLevelEmissionAt = 0
       hasNotifiedResponsePlaybackCompletion = false
+      resetPlayedFrames()
       #if DEBUG
       hasLoggedFirstScheduledBuffer = false
       hasLoggedFirstPlayedBuffer = false
       #endif
       resetPlayer(stopEngine: true)
       cancelTimer()
+    }
+    Task { @MainActor in
+      levelHandler?(0)
     }
   }
 
@@ -725,6 +784,7 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     receivedAt: TimeInterval = ProcessInfo.processInfo.systemUptime
   ) -> RealtimeAudioJitterOfferResult {
     let responseStart: RealtimeAudioJitterResponseStart?
+    let responseID: UInt64
     os_unfair_lock_lock(&ingressLock)
     guard ingressGeneration == generation else {
       let isInactive = ingressGeneration == nil
@@ -733,33 +793,29 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
       performanceMonitor.recordOffer(result, frameCount: 0)
       return result
     }
-    let shouldBeginResponse = !responseIsActive
-    if shouldBeginResponse {
-      responseIsActive = true
-    }
-    os_unfair_lock_unlock(&ingressLock)
-
-    if shouldBeginResponse {
-      responseStart = jitterBuffer.beginResponse(generation: generation)
-      guard let responseStart else {
-        withIngressLock {
-          guard ingressGeneration == generation else { return }
-          responseIsActive = false
-        }
+    if !responseIsActive {
+      guard let started = jitterBuffer.beginResponse(generation: generation) else {
+        os_unfair_lock_unlock(&ingressLock)
         performanceMonitor.recordOffer(.staleGeneration, frameCount: 0)
         return .staleGeneration
       }
-      performanceMonitor.recordResponseStart(discardedChunks: responseStart.discardedChunks)
+      responseIsActive = true
+      responseStart = started
+      responseID = started.responseID
       queue.async { [weak self] in
         guard let self else { return }
-        self.prepareForResponse(generation: generation, responseID: responseStart.responseID)
+        self.prepareForResponse(generation: generation, responseID: started.responseID)
         self.startTimerIfNeeded()
       }
     } else {
       responseStart = nil
+      responseID = jitterBuffer.snapshot().responseID
     }
+    os_unfair_lock_unlock(&ingressLock)
 
-    let responseID = responseStart?.responseID ?? jitterBuffer.snapshot().responseID
+    if let responseStart {
+      performanceMonitor.recordResponseStart(discardedChunks: responseStart.discardedChunks)
+    }
     let result = jitterBuffer.offer(
       data,
       format: outputFormat,
@@ -768,7 +824,27 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
       receivedAt: receivedAt
     )
     performanceMonitor.recordOffer(result, frameCount: data.count / outputFormat.bytesPerFrame)
+    if result.isAccepted {
+      requestScheduling()
+    }
     return result
+  }
+
+  func prepare(generation: Int) {
+    prepare(generation: generation) { _ in }
+  }
+
+  func prepare(
+    generation: Int,
+    completion: @escaping @Sendable (Bool) -> Void
+  ) {
+    queue.async { [weak self] in
+      guard let self, self.activeGeneration == generation else {
+        completion(false)
+        return
+      }
+      completion(self.ensurePlayerGraphAndStart())
+    }
   }
 
   func recordUnsupportedFormat() {
@@ -779,36 +855,126 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     withIngressLock {
       guard ingressGeneration == generation else { return }
       responseIsActive = false
-    }
-    jitterBuffer.finishResponse(generation: generation)
-    queue.async { [weak self] in
-      guard let self, self.activeGeneration == generation else { return }
-      self.scheduleAvailableAudio()
+      jitterBuffer.finishResponse(generation: generation)
+      queue.async { [weak self] in
+        guard let self, self.activeGeneration == generation else { return }
+        self.scheduleAvailableAudio()
+      }
     }
   }
 
-  func interrupt(generation: Int) {
-    withIngressLock {
-      guard ingressGeneration == generation else { return }
+  /// Milliseconds of assistant audio that actually reached the speaker for the
+  /// current response. Read with an atomic load so the barge-in path never
+  /// blocks on the playback queue; the value is updated from
+  /// `handlePlaybackCompletion` as `.dataPlayedBack` callbacks land.
+  var playedMillisecondsForActiveResponse: Int {
+    os_unfair_lock_lock(&playedFramesLock)
+    let frames = playedFramesForActiveResponse
+    let rate = playedFramesSampleRate
+    os_unfair_lock_unlock(&playedFramesLock)
+    guard rate > 0, frames > 0 else { return 0 }
+    return Int((Double(frames) / rate * 1_000).rounded())
+  }
+
+  private func resetPlayedFrames() {
+    os_unfair_lock_lock(&playedFramesLock)
+    playedFramesForActiveResponse = 0
+    os_unfair_lock_unlock(&playedFramesLock)
+  }
+
+  private func recordPlayedFrames(_ frameCount: Int) {
+    guard frameCount > 0 else { return }
+    os_unfair_lock_lock(&playedFramesLock)
+    playedFramesForActiveResponse += frameCount
+    playedFramesSampleRate = outputFormat.sampleRate
+    os_unfair_lock_unlock(&playedFramesLock)
+  }
+
+  /// Interrupts playback and reports how much of the response was truly heard.
+  /// The returned value is captured *before* the reset clears the counter, so
+  /// callers can forward it to the provider as `audio_end_ms`.
+  @discardableResult
+  func interrupt(generation: Int) -> Int {
+    let runsOnPlaybackQueue = DispatchQueue.getSpecific(key: queueKey) != nil
+    let playedMilliseconds = playedMillisecondsForActiveResponse
+    let interrupted = withIngressLock { () -> RealtimeAudioJitterResponseStart? in
+      guard ingressGeneration == generation else { return nil }
       responseIsActive = false
+      guard let interrupted = jitterBuffer.interruptResponse(generation: generation) else {
+        return nil
+      }
+      if runsOnPlaybackQueue {
+        resetAfterInterruption(
+          generation: generation,
+          responseID: interrupted.responseID,
+          discardAudioGraph: false
+        )
+      } else {
+        queue.async { [weak self] in
+          self?.resetAfterInterruption(
+            generation: generation,
+            responseID: interrupted.responseID,
+            discardAudioGraph: false
+          )
+        }
+      }
+      return interrupted
     }
-    guard let interrupted = jitterBuffer.interruptResponse(generation: generation) else { return }
+    // A no-op interrupt (stale generation, or no response to interrupt) must not
+    // report progress: the caller would forward it as `audio_end_ms` for a
+    // response this call never actually stopped.
+    guard let interrupted else { return 0 }
     performanceMonitor.recordInterrupt(discardedChunks: interrupted.discardedChunks)
-    queue.async { [weak self] in
-      guard let self, self.activeGeneration == generation else { return }
-      self.activeResponseID = interrupted.responseID
-      self.hasStartedScheduling = false
-      self.wasStarved = false
-      self.scheduledFrames = 0
-      self.scheduledBuffers.removeAll(keepingCapacity: true)
-      self.hasNotifiedResponsePlaybackCompletion = false
-      #if DEBUG
-      self.hasLoggedFirstScheduledBuffer = false
-      self.hasLoggedFirstPlayedBuffer = false
-      #endif
-      self.resetPlayer(stopEngine: false)
-      self.cancelTimer()
+    // The barrier is load-bearing and covered by
+    // `testInterruptWaitsForPlayerResetBarrierWithinBudget`: callers rely on the
+    // queued `resetPlayer` having run by the time this returns. Note it does
+    // block the caller (@MainActor on the barge-in path) for as long as the
+    // playback queue is busy — normally microseconds, but up to the engine-start
+    // timeout in the worst case. Moving the reset off the blocking path is a
+    // separate change that needs the test updated alongside it.
+    if !runsOnPlaybackQueue {
+      synchronouslyOnQueue {}
     }
+    return playedMilliseconds
+  }
+
+  /// Drops the active response and discards the AVAudioEngine graph after an
+  /// audio-system interruption or media-services reset. Ingress stays active,
+  /// so the next response can rebuild lazily without reconnecting the session.
+  @discardableResult
+  func invalidateAudioSystem(generation: Int) -> Int {
+    let runsOnPlaybackQueue = DispatchQueue.getSpecific(key: queueKey) != nil
+    let playedMilliseconds = playedMillisecondsForActiveResponse
+    let interrupted = withIngressLock { () -> RealtimeAudioJitterResponseStart? in
+      guard ingressGeneration == generation else { return nil }
+      responseIsActive = false
+      guard let interrupted = jitterBuffer.interruptResponse(generation: generation) else {
+        return nil
+      }
+      if runsOnPlaybackQueue {
+        resetAfterInterruption(
+          generation: generation,
+          responseID: interrupted.responseID,
+          discardAudioGraph: true
+        )
+      } else {
+        queue.async { [weak self] in
+          self?.resetAfterInterruption(
+            generation: generation,
+            responseID: interrupted.responseID,
+            discardAudioGraph: true
+          )
+        }
+      }
+      return interrupted
+    }
+    // Same rule as `interrupt`: nothing was stopped, so report no progress.
+    guard let interrupted else { return 0 }
+    performanceMonitor.recordInterrupt(discardedChunks: interrupted.discardedChunks)
+    if !runsOnPlaybackQueue {
+      synchronouslyOnQueue {}
+    }
+    return playedMilliseconds
   }
 
   func snapshot() -> RealtimeAudioPlaybackPerformanceSnapshot {
@@ -824,13 +990,36 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     guard timer == nil else { return }
 
     let timer = DispatchSource.makeTimerSource(queue: queue)
-    timer.schedule(deadline: .now(), repeating: .milliseconds(5), leeway: .milliseconds(1))
+    timer.schedule(
+      deadline: .now(),
+      repeating: .milliseconds(schedulingSafetyIntervalMilliseconds),
+      leeway: .milliseconds(1)
+    )
     timer.setEventHandler { [weak self] in
       self?.scheduleAvailableAudio()
       self?.reportMetricsIfNeeded()
     }
     self.timer = timer
     timer.resume()
+  }
+
+  private func requestScheduling() {
+    let shouldWake = withIngressLock { () -> Bool in
+      guard !schedulingWakePending else { return false }
+      schedulingWakePending = true
+      return true
+    }
+    guard shouldWake else { return }
+
+    queue.async { [weak self] in
+      guard let self else { return }
+      // Clear before reading the jitter buffer so an offer racing with this
+      // scheduling pass can enqueue one follow-up wake instead of being lost.
+      self.withIngressLock {
+        self.schedulingWakePending = false
+      }
+      self.scheduleAvailableAudio()
+    }
   }
 
   private func cancelTimer() {
@@ -841,16 +1030,12 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
 
   private func prepareForResponse(generation: Int, responseID: UInt64) {
     guard activeGeneration == generation else { return }
-    activeResponseID = responseID
-    hasStartedScheduling = false
-    wasStarved = false
-    scheduledFrames = 0
-    scheduledBuffers.removeAll(keepingCapacity: true)
-    hasNotifiedResponsePlaybackCompletion = false
-    #if DEBUG
-    hasLoggedFirstScheduledBuffer = false
-    hasLoggedFirstPlayedBuffer = false
-    #endif
+    let queued = jitterBuffer.snapshot()
+    guard queued.activeGeneration == generation, queued.responseID == responseID else { return }
+    // Shared with the interruption path so the played-frame counter can never be
+    // reset in one place and forgotten in the other — a stale count here would
+    // truncate the *next* response at the previous response's position.
+    resetResponseScheduling(responseID: responseID)
     resetPlayer(stopEngine: false)
   }
 
@@ -923,7 +1108,8 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     performanceMonitor.recordScheduled(
       queued: jitterBuffer.snapshot(),
       scheduledFrames: scheduledFrames,
-      decodeDuration: scheduledAt - decodingStartedAt
+      decodeDuration: scheduledAt - decodingStartedAt,
+      receiveToScheduleDuration: scheduledAt - chunk.receivedAt
     )
 
     let pipeline = self
@@ -954,6 +1140,7 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
   private func handlePlaybackCompletion(token: UInt64, scheduledAt: TimeInterval) {
     guard let frameCount = scheduledBuffers.removeValue(forKey: token) else { return }
     scheduledFrames = max(0, scheduledFrames - frameCount)
+    recordPlayedFrames(frameCount)
     performanceMonitor.recordPlayed(scheduledAt: scheduledAt)
     #if DEBUG
     if !hasLoggedFirstPlayedBuffer {
@@ -962,6 +1149,9 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     }
     #endif
     scheduleAvailableAudio()
+    if scheduledFrames == 0 {
+      emitAudioLevel(0, force: true)
+    }
   }
 
   private func notifyResponsePlaybackCompletionIfNeeded(
@@ -1000,6 +1190,17 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
       let player = AVAudioPlayerNode()
       engine.attach(player)
       engine.connect(player, to: engine.mainMixerNode, format: format)
+      engine.mainMixerNode.installTap(
+        onBus: 0,
+        bufferSize: 1_024,
+        format: nil
+      ) { [weak self] buffer, _ in
+        guard let self else { return }
+        let level = Self.normalizedAudioLevel(buffer)
+        self.queue.async { [weak self] in
+          self?.emitAudioLevel(level)
+        }
+      }
       engine.prepare()
       playbackEngine = engine
       playerNode = player
@@ -1009,6 +1210,17 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     guard let playbackEngine else {
       performanceMonitor.recordEngineStartFailure()
       return false
+    }
+
+    if let engineStartOverride {
+      if !didStartEngineWithOverride {
+        guard engineStartOverride() else {
+          performanceMonitor.recordEngineStartFailure()
+          return false
+        }
+        didStartEngineWithOverride = true
+      }
+      return true
     }
 
     do {
@@ -1031,10 +1243,76 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     playerNode?.reset()
     if stopEngine {
       playbackEngine?.stop()
+      didStartEngineWithOverride = false
     }
   }
 
-  private func makePCMBuffer(from data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+  private func discardPlayerGraph() {
+    resetPlayer(stopEngine: true)
+    playbackEngine?.mainMixerNode.removeTap(onBus: 0)
+    playerNode = nil
+    playbackAudioFormat = nil
+    playbackEngine = nil
+  }
+
+  private func resetResponseScheduling(responseID: UInt64) {
+    activeResponseID = responseID
+    hasStartedScheduling = false
+    wasStarved = false
+    scheduledFrames = 0
+    scheduledBuffers.removeAll(keepingCapacity: true)
+    hasNotifiedResponsePlaybackCompletion = false
+    // Per-response counter: every new response and every interruption routes
+    // through here, so the played-ms figure never leaks across turns.
+    resetPlayedFrames()
+    #if DEBUG
+    hasLoggedFirstScheduledBuffer = false
+    hasLoggedFirstPlayedBuffer = false
+    #endif
+  }
+
+  private func resetAfterInterruption(
+    generation: Int,
+    responseID: UInt64,
+    discardAudioGraph: Bool
+  ) {
+    guard activeGeneration == generation else { return }
+    resetResponseScheduling(responseID: responseID)
+    if discardAudioGraph {
+      discardPlayerGraph()
+    } else {
+      resetPlayer(stopEngine: false)
+    }
+    emitAudioLevel(0, force: true)
+    cancelTimer()
+  }
+
+  private static func normalizedAudioLevel(_ buffer: AVAudioPCMBuffer) -> Float {
+    guard buffer.frameLength > 0, let channels = buffer.floatChannelData else { return 0 }
+    let frameCount = vDSP_Length(buffer.frameLength)
+    var peakRMS: Float = 0
+    for channelIndex in 0..<Int(buffer.format.channelCount) {
+      var rms: Float = 0
+      vDSP_rmsqv(channels[channelIndex], 1, &rms, frameCount)
+      peakRMS = max(peakRMS, rms)
+    }
+    return min(max(peakRMS * 8, 0), 1)
+  }
+
+  private func emitAudioLevel(_ level: Float, force: Bool = false) {
+    let clamped = min(max(level, 0), 1)
+    let now = ProcessInfo.processInfo.systemUptime
+    guard force || now - lastAudioLevelEmissionAt >= 0.08 else { return }
+    guard force || abs(clamped - lastEmittedAudioLevel) >= 0.015 else { return }
+    lastEmittedAudioLevel = clamped
+    lastAudioLevelEmissionAt = now
+    let handler = onAudioLevel
+    Task { @MainActor in
+      handler?(clamped)
+    }
+  }
+
+  func makePCMBuffer(from data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
     let frameCount = data.count / outputFormat.bytesPerFrame
     guard frameCount > 0,
       data.count.isMultiple(of: outputFormat.bytesPerFrame),
@@ -1047,22 +1325,54 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     }
 
     buffer.frameLength = AVAudioFrameCount(frameCount)
-    data.withUnsafeBytes { (rawBytes: UnsafeRawBufferPointer) in
+    switch outputFormat.encoding {
+    case .signedInteger16LittleEndian:
+      decodePCM16LittleEndian(data, frameCount: frameCount, into: channelData)
+    }
+    return buffer
+  }
+
+  private func decodePCM16LittleEndian(
+    _ data: Data,
+    frameCount: Int,
+    into channelData: UnsafePointer<UnsafeMutablePointer<Float>>
+  ) {
+    data.withUnsafeBytes { rawBytes in
+      guard let baseAddress = rawBytes.baseAddress else { return }
+
+      // Every supported Apple target is little-endian. Owned Data is normally
+      // aligned, so Accelerate can convert each interleaved channel directly
+      // into the non-interleaved AVAudioPCMBuffer without a temporary array.
+      if UInt16(littleEndian: 1) == 1,
+        Int(bitPattern: baseAddress).isMultiple(of: MemoryLayout<Int16>.alignment) {
+        let samples = baseAddress.assumingMemoryBound(to: Int16.self)
+        let sourceStride = vDSP_Stride(outputFormat.channelCount)
+        let length = vDSP_Length(frameCount)
+        var scale: Float = 1.0 / 32_768.0
+        for channelIndex in 0..<outputFormat.channelCount {
+          let destination = channelData[channelIndex]
+          vDSP_vflt16(
+            samples.advanced(by: channelIndex),
+            sourceStride,
+            destination,
+            1,
+            length
+          )
+          vDSP_vsmul(destination, 1, &scale, destination, 1, length)
+        }
+        return
+      }
+
       let bytes = rawBytes.bindMemory(to: UInt8.self)
-      switch outputFormat.encoding {
-      case .signedInteger16LittleEndian:
-        for frameIndex in 0..<frameCount {
-          for channelIndex in 0..<outputFormat.channelCount {
-            let byteOffset = frameIndex * outputFormat.bytesPerFrame
-              + channelIndex * outputFormat.encoding.bytesPerSample
-            let sampleBits = UInt16(bytes[byteOffset]) | UInt16(bytes[byteOffset + 1]) << 8
-            let sample = Int16(bitPattern: sampleBits)
-            channelData[channelIndex][frameIndex] = Float(sample) / 32_768.0
-          }
+      for frameIndex in 0..<frameCount {
+        for channelIndex in 0..<outputFormat.channelCount {
+          let byteOffset = frameIndex * outputFormat.bytesPerFrame
+            + channelIndex * outputFormat.encoding.bytesPerSample
+          let sampleBits = UInt16(bytes[byteOffset]) | UInt16(bytes[byteOffset + 1]) << 8
+          channelData[channelIndex][frameIndex] = Float(Int16(bitPattern: sampleBits)) / 32_768.0
         }
       }
     }
-    return buffer
   }
 
   private func failPlayback(generation: Int, message: String) {
@@ -1078,6 +1388,7 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
 
     _ = jitterBuffer.deactivateAndClear()
     let failure = onFailure
+    emitAudioLevel(0, force: true)
     activeGeneration = nil
     activeResponseID = 0
     hasStartedScheduling = false
@@ -1107,7 +1418,7 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     )
     guard !metrics.isEmpty else { return }
     logger.debug(
-      "Playback metrics input=\(metrics.receivedChunks) scheduled=\(metrics.scheduledChunks) played=\(metrics.playedChunks) queue=\(metrics.currentQueuedFrames)/\(metrics.queueCapacityFrames) peak=\(metrics.maximumQueuedFrames) scheduledFrames=\(metrics.scheduledFrames) drops=\(metrics.droppedChunks)[inactive=\(metrics.inactiveDrops) stale=\(metrics.staleGenerationDrops) invalidFormat=\(metrics.invalidFormatDrops) invalidAlignment=\(metrics.invalidFrameAlignmentDrops) oversized=\(metrics.oversizedChunkDrops) queueFull=\(metrics.queueFullDrops) replaced=\(metrics.replacedQueuedChunks) responseStart=\(metrics.discardedOnResponseStart) interrupt=\(metrics.discardedOnInterrupt)] underruns=\(metrics.underruns) decodeMs=\(metrics.averageDecodeMilliseconds) playDelayMs=\(metrics.averageScheduleToPlaybackMilliseconds)"
+      "Playback metrics input=\(metrics.receivedChunks) scheduled=\(metrics.scheduledChunks) played=\(metrics.playedChunks) queue=\(metrics.currentQueuedFrames)/\(metrics.queueCapacityFrames) peak=\(metrics.maximumQueuedFrames) scheduledFrames=\(metrics.scheduledFrames) drops=\(metrics.droppedChunks)[inactive=\(metrics.inactiveDrops) stale=\(metrics.staleGenerationDrops) invalidFormat=\(metrics.invalidFormatDrops) invalidAlignment=\(metrics.invalidFrameAlignmentDrops) oversized=\(metrics.oversizedChunkDrops) queueFull=\(metrics.queueFullDrops) replaced=\(metrics.replacedQueuedChunks) responseStart=\(metrics.discardedOnResponseStart) interrupt=\(metrics.discardedOnInterrupt)] underruns=\(metrics.underruns) decodeMs=\(metrics.averageDecodeMilliseconds) ingressMs=\(metrics.averageReceiveToScheduleMilliseconds) playDelayMs=\(metrics.averageScheduleToPlaybackMilliseconds)"
     )
     // Device-console diagnostics are intentionally limited to one summary per
     // second and compiled out of Release builds.
@@ -1137,3 +1448,28 @@ final class RealtimeAudioPlaybackPipeline: @unchecked Sendable {
     return body()
   }
 }
+
+protocol RealtimeAudioPlaybackControlling: AnyObject {
+  func start(
+    generation: Int,
+    onFailure: @escaping RealtimeAudioPlaybackPipeline.FailureHandler,
+    onResponsePlaybackComplete: @escaping RealtimeAudioPlaybackPipeline.PlaybackCompletionHandler,
+    onAudioLevel: @escaping RealtimeAudioPlaybackPipeline.AudioLevelHandler
+  )
+  func prepare(generation: Int)
+  func stop()
+  func enqueue(
+    _ data: Data,
+    generation: Int,
+    receivedAt: TimeInterval
+  ) -> RealtimeAudioJitterOfferResult
+  func finishResponse(generation: Int)
+  /// Returns the milliseconds of the active response that actually reached the
+  /// speaker, so callers can tell the provider how much the user really heard.
+  @discardableResult
+  func interrupt(generation: Int) -> Int
+  @discardableResult
+  func invalidateAudioSystem(generation: Int) -> Int
+}
+
+extension RealtimeAudioPlaybackPipeline: RealtimeAudioPlaybackControlling {}

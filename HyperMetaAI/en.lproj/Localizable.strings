@@ -151,6 +151,7 @@
 "gallery.brain.auto" = "Auto (Recommended)";
 "gallery.brain.cancel" = "Cancel";
 "agent.vision.gallery.prompt" = "Please look at this photo";
+"agent.vision.photo.button" = "Choose Photo";
 
 // MARK: - Common
 "common.delete" = "Delete";
@@ -883,7 +884,8 @@
 "agent.vision.translate.sent" = "Translation request sent";
 "agent.vision.translate.notext" = "No captured text to translate — tap OCR first";
 "agent.brain.default.toggle" = "Default Voice Brain";
-"agent.brain.default.footer" = "Qwen is native realtime voice. With Hermes / OpenClaw selected, voice dictation is forwarded to that brain and replies are spoken via TTS.";
+"agent.brain.default.footer" = "Auto is the default and only selects a currently available backend Agent. With no available backend it uses frontend-only mode. Choose No Backend Agent to always use Qwen realtime voice alone.";
+"agent.brain.none" = "No Backend Agent";
 "agent.trigger.interrupted" = "Interrupted by temple tap";
 "agent.trigger.resumed" = "Resumed, keep talking";
 "agent.trigger.ended" = "Turn ended by temple hold";
@@ -891,16 +893,19 @@
 "qwen.voice.title" = "Realtime Voice";
 "qwen.voice.brain" = "Brain";
 "qwen.voice.brain.forward" = "Dictation";
+"qwen.voice.brain.frontend_only" = "Frontend only";
 "qwen.voice.subtitle" = "Full-duplex voice via the qwen-audio-agent gateway";
 "qwen.voice.section" = "Realtime Voice";
 "qwen.voice.connected" = "Connected";
 "qwen.voice.connecting" = "Connecting...";
+"qwen.voice.sleeping" = "Standing by";
+"qwen.voice.waking" = "Waking...";
 "qwen.voice.disconnected" = "Not connected";
 "qwen.voice.speaking" = "Speaking";
 "qwen.voice.listening" = "Listening";
 "qwen.voice.idle" = "Idle";
 "qwen.voice.tapstart" = "Tap to start a voice session";
-"qwen.voice.tapstop" = "Tap to interrupt, hold to end";
+"qwen.voice.tapstop" = "Tap again or hold to end";
 "qwen.settings.section" = "Qwen Gateway";
 "qwen.settings.footer" = "Address of an external qwen-audio-agent gateway (default port 3101).";
 "qwen.settings.mode" = "Gateway";
@@ -909,6 +914,7 @@
 "qwen.settings.mode.builtin.footer" = "Built-in is the default. The App connects directly to Qwen Realtime using your DashScope API key.";
 "qwen.settings.mode.external.footer" = "Use a compatible qwen-audio-agent gateway at an address you provide.";
 "qwen.settings.external.section" = "External Address";
+"qwen.settings.tls" = "Use TLS";
 "qwen.settings.api.status" = "DashScope API Key";
 "qwen.settings.api.configured" = "Configured";
 "qwen.settings.api.missing" = "Required";
@@ -916,8 +922,8 @@
 "qwen.settings.saved" = "Saved";
 "qwen.voice.config" = "Gateway";
 "qwen.voice.config.prompt" = "Cannot reach the gateway. Configure it to retry.";
-"qwen.voice.config.hint" = "Enter the host and port of the external qwen-audio-agent gateway (default port 3101).";
 "qwen.error.api.key" = "Configure a DashScope API key to use the built-in Qwen Gateway.";
+"qwen.error.response.start.timeout" = "The realtime model did not start a reply. The voice connection was recovered; please try again.";
 "qwen.voice.tasks.running" = "%d task(s) running";
 "qwen.voice.idle.toggle" = "Auto-end when idle";
 "qwen.voice.idle.footer" = "End the session automatically after 120s of inactivity.";
@@ -929,7 +935,7 @@
 "qwen.voice.vision.noapikey" = "Configure the Vision API in Settings first";
 "qwen.voice.vision.noframe" = "No glasses frame available. Make sure your glasses are connected.";
 "qwen.voice.vision.failed" = "Failed to describe the scene. Try again later.";
-"qwen.voice.glasses.offline" = "Glasses not connected. Temple gestures unavailable.";
+"qwen.voice.glasses.offline" = "Phone mode is active: voice and photo input are available; temple gestures are unavailable.";
 "qwen.voice.history.header" = "Previous session";
 "agent.chat.history.restored" = "Previous conversation restored";
 "agent.chat.new.title" = "New Conversation";
@@ -1158,7 +1164,7 @@
 "agent.presence.on" = "Presence on: no auto-end while idle";
 "agent.presence.off" = "Presence off";
 "agent.voice.end.done" = "Session ended";
-"agent.trigger.reconnected" = "Glasses connected · tap to resume";
+"agent.trigger.reconnected" = "Glasses connected · tap to start";
 "agent.permission.mode.title" = "Permission Mode";
 "agent.permission.mode.alwaysAsk" = "Always ask";
 "agent.permission.mode.alwaysAsk.detail" = "Prompt for every permission request (default)";
@@ -1453,7 +1459,6 @@
 "agent.share.list.name" = "Shared";
 "qwen.wakeword.title" = "Voice wake word";
 "qwen.wakeword.subtitle" = "Say \"你好千问\" to wake the assistant while sleeping.";
-"qwen.wakeword.footer" = "Uses on-device speech recognition. When the voice session sleeps, say the wake word to wake it up.";
 "qwen.wakeword.listening" = "Listening for “你好千问”";
 "qwen.wakeword.sleeping" = "Sleeping";
 "qwen.wakeword.wake" = "Wake";
@@ -1491,6 +1496,7 @@
 
 /* Lucky Wearable Trigger Hub */
 "agent.wearable.source.glassesSession" = "Glasses Tap";
+"agent.wearable.source.glassesCaptureButton" = "Glasses Shutter";
 "agent.wearable.source.glassesDisplay" = "Glasses Display";
 "agent.wearable.source.mockCaptouch" = "Mock Captouch";
 "agent.wearable.source.backTap" = "Back Tap";
@@ -1503,6 +1509,8 @@
 "agent.wearable.gesture.resume" = "Resume";
 "agent.wearable.gesture.endTurn" = "End Turn";
 "agent.wearable.gesture.captureVision" = "Capture Vision";
+"agent.wearable.gesture.captureButton" = "Shutter Capture";
+"agent.wearable.gesture.doubleTap" = "Double Tap";
 "agent.wearable.gesture.repeatLastReply" = "Repeat Reply";
 "agent.wearable.gesture.mockTap" = "Tap";
 "agent.wearable.gesture.mockTapAndHold" = "Tap & Hold";
@@ -1516,6 +1524,21 @@
 "agent.wearable.outcome.dismiss" = "Dismissed menu";
 "agent.wearable.outcome.ignored.cooldown" = "Ignored (debounce)";
 "agent.wearable.outcome.ignored.noActiveSession" = "Ignored (no active session)";
+"agent.wearable.outcome.ignored.unsupportedGesture" = "Ignored (raw event unavailable in SDK)";
+"agent.wearable.touch.header" = "Ray-Ban Meta Touch Capabilities";
+"agent.wearable.touch.footer" = "Tap once to start, tap again to end. The app has no pause state; native media controls remain when the app is not running.";
+"agent.wearable.touch.singleTap" = "Single Tap";
+"agent.wearable.touch.doubleTap" = "Double Tap";
+"agent.wearable.touch.longPress" = "Long Press";
+"agent.wearable.touch.captureButton" = "Capture Button";
+"agent.wearable.touch.available" = "Available";
+"agent.wearable.touch.unavailable" = "Not exposed by SDK";
+"agent.wearable.touch.detail.singleTap" = "Inferred from DAT session state as a start/end toggle";
+"agent.wearable.touch.detail.longPress" = "Inferred from the DAT stopped state as end";
+"agent.wearable.touch.detail.mockTap" = "MockCaptouchKit tap()";
+"agent.wearable.touch.detail.mockHold" = "MockCaptouchKit tapAndHold()";
+"agent.wearable.touch.detail.unavailable" = "No raw callback in 0.9.0";
+"agent.wearable.touch.detail.captureUnavailable" = "Camera capture exists, but no raw shutter-button callback";
 "agent.wearable.hub.title" = "Wearable Triggers";
 "agent.wearable.status.header" = "Glasses Status";
 "agent.wearable.status.title" = "Meta AI Glasses";
@@ -1600,6 +1623,7 @@
 "agent.ask.intent.brain" = "Agent";
 "agent.ask.brain.title" = "Agent";
 "agent.ask.brain.auto" = "Auto";
+"agent.ask.brain.none" = "No Backend Agent";
 "agent.ask.brain.hermes" = "Hermes";
 "agent.ask.brain.openclaw" = "OpenClaw";
 "agent.ask.brain.custom" = "Custom Agent";
@@ -1672,3 +1696,56 @@
 "reminder.schema.param.tags" = "Tags";
 "reminder.schema.param.urls" = "Links";
 "reminder.schema.param.images" = "Images";
+
+/* Primary assistant */
+"assistant.primary.device.glasses" = "Ray-Ban Meta";
+"assistant.primary.device.phone" = "iPhone";
+"assistant.primary.start" = "Start Conversation";
+"assistant.primary.end" = "End Conversation";
+"assistant.primary.vision.glasses" = "Read Glasses View";
+"assistant.primary.vision.photo" = "Choose Photo";
+"assistant.primary.orb.hint.inactive" = "Tap to start a voice conversation";
+"assistant.primary.orb.hint.active" = "Tap to end the current voice session";
+"assistant.primary.status.start" = "Ready to Talk";
+"assistant.primary.status.ready" = "Ready";
+"assistant.primary.status.connecting" = "Connecting";
+"assistant.primary.status.waking" = "Waking";
+"assistant.primary.status.listening" = "Listening";
+"assistant.primary.status.thinking" = "Thinking";
+"assistant.primary.status.speaking" = "Responding";
+"assistant.primary.status.working" = "Working on Task";
+"assistant.primary.status.error" = "Connection Issue";
+"assistant.primary.detail.glasses" = "Using Ray-Ban Meta";
+"assistant.primary.detail.phone" = "Using iPhone";
+"assistant.primary.feedback.interrupted" = "Response interrupted";
+"assistant.primary.feedback.connecting" = "Connecting";
+"assistant.primary.feedback.microphone" = "Microphone access is required";
+"assistant.primary.permission.title" = "Confirmation Required";
+"assistant.primary.permission.deny" = "Deny";
+"assistant.primary.permission.allow" = "Allow";
+"assistant.primary.tasks.title" = "Tasks";
+"assistant.primary.tasks.empty.title" = "No Tasks";
+"assistant.primary.tasks.empty.detail" = "Task progress and results appear here.";
+"assistant.primary.done" = "Done";
+
+/* Simplified settings */
+"assistant.settings.connection" = "Connection";
+"assistant.settings.conversation" = "Conversation";
+"assistant.settings.controls" = "Interaction";
+"assistant.settings.voice.service" = "Voice Service";
+"assistant.settings.agent" = "Agent";
+"assistant.settings.agent.brain" = "Task Agent";
+"assistant.settings.agent.presence" = "Continuous Conversation";
+"assistant.settings.agent.wake" = "Voice Wake";
+"assistant.settings.agent.more" = "Advanced Settings";
+"assistant.settings.glasses" = "Glasses";
+"assistant.settings.glasses.vision" = "Use Glasses View";
+"assistant.settings.glasses.connect" = "Connect Glasses";
+"assistant.settings.glasses.disconnect" = "Disconnect Glasses";
+"assistant.settings.version" = "Version";
+"assistant.settings.status.online" = "Online";
+"assistant.settings.status.connecting" = "Connecting";
+"assistant.settings.status.waking" = "Waking";
+"assistant.settings.status.check" = "Check Required";
+"assistant.settings.status.waiting" = "Waiting for Device";
+"assistant.settings.status.unpaired" = "Not Paired";

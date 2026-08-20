@@ -5,23 +5,36 @@ import MWDATCore
 @testable import HyperMetaAI
 
 final class AgentDeviceTriggerTests: XCTestCase {
-  func testTapPauseMapsToInterrupt() {
+  func testFirstTouchStartsSession() {
     var detector = AgentDeviceTriggerDetector()
     XCTAssertEqual(
       detector.consume(sessionState: .paused, isAppStopping: false),
-      .tapPause
+      .tapStartSession
     )
-    XCTAssertTrue(detector.isSessionPaused)
+    XCTAssertTrue(detector.isTouchSessionOpen)
   }
 
-  func testResumeMapsToTapResume() {
+  func testSecondTouchEndsSession() {
     var detector = AgentDeviceTriggerDetector()
     _ = detector.consume(sessionState: .paused, isAppStopping: false)
     XCTAssertEqual(
       detector.consume(sessionState: .started, isAppStopping: false),
-      .tapResume
+      .tapEndSession
     )
-    XCTAssertFalse(detector.isSessionPaused)
+    XCTAssertFalse(detector.isTouchSessionOpen)
+  }
+
+  func testRepeatedPausedStateDoesNotCreateAnotherAppEvent() {
+    var detector = AgentDeviceTriggerDetector()
+    XCTAssertEqual(
+      detector.consume(sessionState: .paused, isAppStopping: false),
+      .tapStartSession
+    )
+    XCTAssertNil(
+      detector.consume(sessionState: .paused, isAppStopping: false),
+      "重复硬件状态不应生成暂停或重复开始事件"
+    )
+    XCTAssertTrue(detector.isTouchSessionOpen)
   }
 
   func testStartedWithoutPauseDoesNotEmit() {
@@ -50,28 +63,28 @@ final class AgentDeviceTriggerTests: XCTestCase {
     XCTAssertNil(detector.consume(sessionState: .stopping, isAppStopping: false))
   }
 
-  func testMultiplePauseResumeCycles() {
+  func testMultipleTouchStartEndCycles() {
     var detector = AgentDeviceTriggerDetector()
     for _ in 0..<3 {
       XCTAssertEqual(
         detector.consume(sessionState: .paused, isAppStopping: false),
-        .tapPause
+        .tapStartSession
       )
       XCTAssertEqual(
         detector.consume(sessionState: .started, isAppStopping: false),
-        .tapResume
+        .tapEndSession
       )
     }
   }
 
-  func testAppStopClearsPausedState() {
+  func testAppStopClearsTouchState() {
     var detector = AgentDeviceTriggerDetector()
     _ = detector.consume(sessionState: .paused, isAppStopping: false)
     XCTAssertNil(detector.consume(sessionState: .stopped, isAppStopping: true))
-    // 之后一次真实的镜腿暂停仍应正确触发
+    // 之后一次真实的镜腿触控仍应正确触发
     XCTAssertEqual(
       detector.consume(sessionState: .paused, isAppStopping: false),
-      .tapPause
+      .tapStartSession
     )
   }
 

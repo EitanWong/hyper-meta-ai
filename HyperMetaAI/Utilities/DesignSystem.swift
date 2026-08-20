@@ -53,15 +53,15 @@ extension Color {
 // MARK: - Typography
 
 struct AppTypography {
-    static let largeTitle = Font.system(size: 34, weight: .bold, design: .rounded)
-    static let title = Font.system(size: 28, weight: .bold, design: .rounded)
-    static let title2 = Font.system(size: 22, weight: .semibold, design: .rounded)
-    static let headline = Font.system(size: 17, weight: .semibold, design: .rounded)
-    static let body = Font.system(size: 17, weight: .regular, design: .rounded)
-    static let callout = Font.system(size: 16, weight: .regular, design: .rounded)
-    static let subheadline = Font.system(size: 15, weight: .regular, design: .rounded)
-    static let footnote = Font.system(size: 13, weight: .regular, design: .rounded)
-    static let caption = Font.system(size: 12, weight: .regular, design: .rounded)
+    static let largeTitle = Font.largeTitle.weight(.bold)
+    static let title = Font.title.weight(.bold)
+    static let title2 = Font.title2.weight(.semibold)
+    static let headline = Font.headline
+    static let body = Font.body
+    static let callout = Font.callout
+    static let subheadline = Font.subheadline
+    static let footnote = Font.footnote
+    static let caption = Font.caption
 }
 
 // MARK: - Spacing
@@ -99,41 +99,28 @@ struct AppShadow {
     }
 }
 
-private struct PrimaryGlassModifier: ViewModifier {
+private struct AssistantSurfaceModifier: ViewModifier {
     let cornerRadius: CGFloat
-    let interactive: Bool
     let tint: Color?
 
-    @ViewBuilder
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.glassEffect(
-                Glass.regular
-                    .tint(tint)
-                    .interactive(interactive),
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-        } else {
-            content
-                .background(.ultraThinMaterial)
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(.white.opacity(0.14), lineWidth: 0.7)
-                }
-        }
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        content
+            .background(tint ?? Color.white.opacity(0.075), in: shape)
+            .overlay {
+                shape.stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+            }
     }
 }
 
 extension View {
-    func primaryGlass(
+    /// A static assistant surface: no blur, material sampling, or continuous rendering.
+    func assistantSurface(
         cornerRadius: CGFloat,
-        interactive: Bool = false,
         tint: Color? = nil
     ) -> some View {
-        modifier(PrimaryGlassModifier(
+        modifier(AssistantSurfaceModifier(
             cornerRadius: cornerRadius,
-            interactive: interactive,
             tint: tint
         ))
     }

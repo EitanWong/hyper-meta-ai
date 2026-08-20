@@ -18,7 +18,7 @@ final class AgentDisplayStatusTests: XCTestCase {
         XCTAssertEqual(AgentDisplayStatusMapping.title(for: .listening), "Listening")
         XCTAssertEqual(AgentDisplayStatusMapping.title(for: .thinking), "Thinking")
         XCTAssertEqual(AgentDisplayStatusMapping.title(for: .speaking), "Speaking")
-        XCTAssertEqual(AgentDisplayStatusMapping.title(for: .interrupted), "Paused")
+        XCTAssertEqual(AgentDisplayStatusMapping.title(for: .interrupted), "Interrupted")
         XCTAssertEqual(AgentDisplayStatusMapping.title(for: .approval), "Approve?")
         XCTAssertEqual(AgentDisplayStatusMapping.title(for: .idle), "", "idle 不显示文字")
     }

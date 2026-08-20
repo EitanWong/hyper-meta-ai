@@ -89,7 +89,7 @@ final class LiveAIManager: ObservableObject {
 
         guard await stream.acquireStream(for: .liveAI) else {
             await stream.releaseStream(for: .liveAI)
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             errorMessage = stream.errorMessage.isEmpty
                 ? "Could not start the glasses camera stream."
                 : stream.errorMessage
@@ -98,7 +98,7 @@ final class LiveAIManager: ObservableObject {
 
         guard lifecycleGeneration == generation else {
             await stream.releaseStream(for: .liveAI)
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             return false
         }
 
@@ -124,7 +124,7 @@ final class LiveAIManager: ObservableObject {
             lifecycleGeneration &+= 1
             isStarting = false
             await streamViewModel?.releaseStream(for: .liveAI)
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             isRunning = false
             return
         }
@@ -138,7 +138,7 @@ final class LiveAIManager: ObservableObject {
             lifecycleGeneration &+= 1
             isStarting = false
             await streamViewModel?.releaseStream(for: .liveAI)
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             return
         }
 
@@ -155,7 +155,7 @@ final class LiveAIManager: ObservableObject {
         lifecycleGeneration &+= 1
         viewModel.disconnect()
         await stream?.releaseStream(for: .liveAI)
-        AudioSessionCoordinator.shared.deactivate(.liveAI)
+        AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
         errorMessage = nil
     }
 
@@ -183,7 +183,7 @@ final class LiveAIManager: ObservableObject {
             self.isStarting = false
             self.lifecycleGeneration &+= 1
             await stream?.releaseStream(for: .liveAI)
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             self.errorMessage = message
             self.connectionTimeoutTask = nil
         }
@@ -191,7 +191,7 @@ final class LiveAIManager: ObservableObject {
 
     private func prepareFullDuplexAudioRoute(generation: Int) async -> Bool {
         do {
-            try AudioSessionCoordinator.shared.activate(.liveAI, profile: .voiceChat)
+            try await AudioSessionCoordinator.shared.activateAsync(.liveAI, profile: .voiceChat)
 
             let initialRoute = AVAudioSession.sharedInstance().currentRoute
             liveAIManagerLogger.info(
@@ -200,7 +200,7 @@ final class LiveAIManager: ObservableObject {
 
             try await Task.sleep(nanoseconds: audioRouteSettleNanoseconds)
             guard !Task.isCancelled, lifecycleGeneration == generation else {
-                AudioSessionCoordinator.shared.deactivate(.liveAI)
+                AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
                 return false
             }
 
@@ -210,10 +210,10 @@ final class LiveAIManager: ObservableObject {
             )
             return true
         } catch is CancellationError {
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             return false
         } catch {
-            AudioSessionCoordinator.shared.deactivate(.liveAI)
+            AudioSessionCoordinator.shared.deactivateAsync(.liveAI)
             errorMessage = "Could not prepare Live AI audio: \(error.localizedDescription)"
             liveAIManagerLogger.error(
                 "Audio route preparation failed: \(error.localizedDescription, privacy: .public)"

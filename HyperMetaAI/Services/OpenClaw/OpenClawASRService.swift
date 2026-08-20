@@ -233,6 +233,7 @@ class OpenClawASRService: NSObject {
                 return
             }
 
+            try AppleVoiceAudioFrontEnd.configure(engine)
             let inputNode = engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
 

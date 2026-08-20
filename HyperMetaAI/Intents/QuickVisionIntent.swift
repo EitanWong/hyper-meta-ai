@@ -201,25 +201,16 @@ struct HyperMetaAIShortcuts: AppShortcutsProvider {
             systemImageName: "character.bubble.fill"
         )
 
-        // 实时对话
-        AppShortcut(
-            intent: LiveAIIntent(),
-            phrases: [
-                "用 \(.applicationName) 实时对话",
-                "\(.applicationName) 实时对话",
-                "开始 \(.applicationName) 实时对话",
-                "\(.applicationName) 开始对话"
-            ],
-            shortTitle: "实时对话",
-            systemImageName: "brain.head.profile"
-        )
-
-        // 语音对话（Agent 统一输入入口）
+        // 语音对话（Agent 统一输入入口，同时承接「实时对话」的旧唤起短语）
         AppShortcut(
             intent: VoiceAssistantAppIntent(),
             phrases: [
                 "跟 \(.applicationName) 说话",
                 "用 \(.applicationName) 开始语音对话",
+                "用 \(.applicationName) 实时对话",
+                "\(.applicationName) 实时对话",
+                "开始 \(.applicationName) 实时对话",
+                "\(.applicationName) 开始对话",
                 "Talk to \(.applicationName)",
                 "Start a voice conversation with \(.applicationName)"
             ],
@@ -251,18 +242,19 @@ struct HyperMetaAIShortcuts: AppShortcutsProvider {
             systemImageName: "checklist"
         )
 
-        // 停止实时对话
+        // 停止语音对话（同时承接「停止实时对话」的旧唤起短语）
         AppShortcut(
-            intent: StopLiveAIIntent(),
+            intent: StopVoiceAssistantAppIntent(),
             phrases: [
+                "\(.applicationName) 停止语音对话",
                 "\(.applicationName) 停止实时对话",
                 "停止 \(.applicationName) 实时对话",
-                "\(.applicationName) 结束对话"
+                "\(.applicationName) 结束对话",
+                "Stop the \(.applicationName) voice conversation"
             ],
-            shortTitle: "停止实时对话",
+            shortTitle: "停止语音对话",
             systemImageName: "stop.circle.fill"
         )
-
     }
 }
 

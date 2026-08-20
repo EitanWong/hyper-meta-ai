@@ -54,6 +54,31 @@ final class AgentWearableTriggerRouterTests: XCTestCase {
         )
     }
 
+    func testCaptureButtonUsesVisionCapturePath() {
+        var router = AgentWearableTriggerRouter()
+        XCTAssertEqual(
+            router.route(source: .glassesCaptureButton, gesture: .captureButton, isSessionActive: false),
+            .captureVision
+        )
+    }
+
+    func testDoubleTapIsExplicitlyReportedUnsupported() {
+        var router = AgentWearableTriggerRouter()
+        XCTAssertEqual(
+            router.route(source: .glassesSession, gesture: .doubleTap, isSessionActive: false),
+            .ignored(.unsupportedGesture)
+        )
+    }
+
+    func testTouchCatalogSeparatesSupportedAndUnavailableHardwareEvents() {
+        let singleTap = AgentWearableTouchCatalog.realGlasses.first { $0.kind == .singleTap }
+        let doubleTap = AgentWearableTouchCatalog.realGlasses.first { $0.kind == .doubleTap }
+        let captureButton = AgentWearableTouchCatalog.realGlasses.first { $0.kind == .captureButton }
+        XCTAssertEqual(singleTap?.isAvailable, true)
+        XCTAssertEqual(doubleTap?.isAvailable, false)
+        XCTAssertEqual(captureButton?.isAvailable, false)
+    }
+
     func testMockTapMapsToWake() {
         var router = AgentWearableTriggerRouter()
         XCTAssertEqual(
@@ -83,6 +108,7 @@ final class AgentWearableTriggerRouterTests: XCTestCase {
             (.turn(.endTurn), "endTurn"),
             (.turn(.none), "none"),
             (.captureVision, "captureVision"),
+            (.ignored(.unsupportedGesture), "ignored.unsupportedGesture"),
             (.repeatLastReply, "repeatLastReply"),
             (.newChat, "newChat"),
             (.dismissMenu, "dismiss"),

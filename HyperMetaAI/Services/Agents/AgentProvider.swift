@@ -79,10 +79,12 @@ enum AgentConnectionState: Equatable {
 
 // MARK: - Agent Brain（语音页听写大脑）
 
-/// 语音页的「大脑」：Qwen 原生实时语音，或把听写文本转发给 Hermes / OpenClaw / 自定义 Agent
-enum AgentBrain: String, CaseIterable, Identifiable {
-    /// 自动路由：任务型指令 → OpenClaw，其余 → Hermes（听写转发模式）
+/// 语音页的「大脑」：Qwen 原生实时语音，或把听写文本转发给后台 Agent。
+enum AgentBrain: String, CaseIterable, Identifiable, Hashable {
+    /// 自动路由：只选择当前可用的后台 Agent；无可用后端时进入仅前台模式。
     case auto
+    /// 仅使用 Qwen 实时语音前台，不连接或调用后台 Agent。
+    case none
     case qwen
     case hermes
     case openclaw
@@ -94,6 +96,7 @@ enum AgentBrain: String, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .auto: return "Auto"
+        case .none: return "agent.brain.none".localized
         case .qwen: return "Qwen"
         case .hermes: return "Hermes"
         case .openclaw: return "OpenClaw"
@@ -104,10 +107,19 @@ enum AgentBrain: String, CaseIterable, Identifiable {
     var symbolName: String {
         switch self {
         case .auto: return "sparkles"
+        case .none: return "network.slash"
         case .qwen: return "waveform"
         case .hermes: return "wand.and.stars"
         case .openclaw: return "link.circle.fill"
         case .custom: return "globe"
+        }
+    }
+
+    /// 已解析到可执行后台的具体选择。Auto 必须先经路由解析。
+    var isConcreteBackend: Bool {
+        switch self {
+        case .hermes, .openclaw, .custom: return true
+        case .auto, .none, .qwen: return false
         }
     }
 }
@@ -119,7 +131,7 @@ enum AgentBrainSettings {
 
     static var selected: AgentBrain {
         get {
-            AgentBrain(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .qwen
+            AgentBrain(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .auto
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: key)
@@ -138,6 +150,56 @@ enum AgentBrainSettings {
                 UserDefaults.standard.removeObject(forKey: customAgentIDKey)
             }
         }
+    }
+}
+
+/// 当前可供 Auto 选择的后台 Agent。值类型让路由规则无需真实网络即可测试。
+struct AgentBackendAvailability: Equatable {
+    var openClawReady: Bool
+    var hermesReady: Bool
+    var customReady: Bool
+
+    static let none = AgentBackendAvailability(
+        openClawReady: false,
+        hermesReady: false,
+        customReady: false
+    )
+
+    var hasReadyBackend: Bool {
+        openClawReady || hermesReady || customReady
+    }
+
+    func isReady(_ brain: AgentBrain) -> Bool {
+        switch brain {
+        case .openclaw: return openClawReady
+        case .hermes: return hermesReady
+        case .custom: return customReady
+        case .auto, .none, .qwen: return false
+        }
+    }
+
+    /// OpenClaw / Hermes 以健康连接为准；自定义后端以已保存的合法配置为准。
+    @MainActor
+    static var current: AgentBackendAvailability {
+        AgentBackendAvailability(
+            openClawReady: OpenClawNodeService.shared.connectionState == .connected,
+            hermesReady: HermesService.shared.connectionState.isOnline,
+            customReady: CustomAgentStore.configs.contains(where: \.isValid)
+        )
+    }
+}
+
+/// The realtime voice frontend must keep one stable output owner for a full
+/// provider session. Auto stays on native Qwen; backend transcription mode is
+/// entered only for an explicitly selected backend that is ready at connect.
+enum AgentVoiceBrainPolicy {
+    static func forwardingTarget(
+        selection: AgentBrain,
+        availability: AgentBackendAvailability
+    ) -> AgentBrain? {
+        guard selection.isConcreteBackend,
+              availability.isReady(selection) else { return nil }
+        return selection
     }
 }
 
@@ -288,8 +350,58 @@ enum AgentVoiceHistoryNaming {
     }
 }
 
+/// Marks requests that need current external facts and adds a compact execution
+/// contract only for those turns. Keeping this out of ordinary chat avoids extra
+/// prompt tokens and preserves realtime first-response latency.
+enum AgentWebSearchPolicy {
+    private static let explicitSearchSignals = [
+        "联网", "上网查", "搜索", "搜一下", "查一下", "查一查", "核实一下",
+        "web search", "search online", "look up", "browse the web",
+    ]
+    private static let volatileSubjects = [
+        "天气", "新闻", "股价", "汇率", "金价", "油价", "航班", "列车", "高铁",
+        "比赛", "赛程", "比分", "路况", "票价", "价格", "营业时间", "库存",
+        "weather", "news", "stock price", "exchange rate", "flight", "schedule",
+        "score", "traffic", "opening hours", "availability",
+    ]
+    private static let freshnessSignals = [
+        "最新", "实时", "当前", "今天", "明天", "本周", "刚刚", "最近",
+        "latest", "live", "current", "today", "tomorrow", "this week", "recent",
+    ]
+    private static let timelessKnowledgeSignals = [
+        "为什么", "原理", "解释", "是什么", "历史", "如何运作",
+        "why", "explain", "what is", "history of", "how does",
+    ]
+
+    static func requiresWebSearch(_ text: String) -> Bool {
+        let normalized = text.lowercased()
+        if explicitSearchSignals.contains(where: normalized.contains) { return true }
+        let hasVolatileSubject = volatileSubjects.contains(where: normalized.contains)
+        let hasFreshnessSignal = freshnessSignals.contains(where: normalized.contains)
+        if !hasFreshnessSignal,
+           timelessKnowledgeSignals.contains(where: normalized.contains) {
+            return false
+        }
+        return hasVolatileSubject && (hasFreshnessSignal || normalized.count <= 24)
+    }
+
+    static func preparedRequest(
+        _ text: String,
+        now: Date = Date(),
+        timeZone: TimeZone = .current
+    ) -> String {
+        guard requiresWebSearch(text) else { return text }
+        let timestamp = ISO8601DateFormatter().string(from: now)
+        return """
+        【联网检索要求】并行检索独立事实；优先官方、一手和近期来源；核对发布日期与事件发生时间并交叉验证关键结论；先以【语音结论】开头给一句不含网址的结论，再给要点；链接统一放在末尾来源区并注明检索时间。不要把模型记忆当作实时结果。
+        【检索基准时间】\(timestamp)（\(timeZone.identifier)）
+        \(text)
+        """
+    }
+}
+
 /// 把听写文本转发给指定大脑（Hermes 流式回调 / OpenClaw 快照回调）。
-/// Qwen 原生模式不转发。
+/// Qwen 与仅前台模式不转发。
 @MainActor
 final class AgentBrainRouter {
     static let shared = AgentBrainRouter()
@@ -325,15 +437,28 @@ final class AgentBrainRouter {
 
     private init() {}
 
-    /// 当前大脑是否需要转发（非 Qwen 即转发）
-    static func isForwarding(to brain: AgentBrain) -> Bool {
-        brain != .qwen
+    /// 当前选择是否需要关闭 Qwen 输出并把听写转发到后台 Agent。
+    static func isForwarding(
+        to brain: AgentBrain,
+        availability: AgentBackendAvailability? = nil
+    ) -> Bool {
+        switch brain {
+        case .auto:
+            return (availability ?? .current).hasReadyBackend
+        case .hermes, .openclaw, .custom:
+            return true
+        case .none, .qwen:
+            return false
+        }
     }
 
     /// 纯规则意图路由：根据用户文本推断最佳大脑（可测试）
     static func route(_ text: String) -> Route {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .qwen }
+        if AgentWebSearchPolicy.requiresWebSearch(trimmed) {
+            return .openclaw
+        }
         let taskKeywords = defaultTaskKeywords + AgentRoutingSettings.customTaskKeywords
         if taskKeywords.contains(where: { trimmed.contains($0) }) {
             return .openclaw
@@ -346,16 +471,23 @@ final class AgentBrainRouter {
         return .hermes
     }
 
-    /// Auto 模式下的路由决策；非 auto 原样返回。
-    /// Auto 是听写转发模式：任务型指令 → OpenClaw，其余（含闲聊）→ Hermes。
-    static func resolvedBrain(_ text: String, selection: AgentBrain) -> AgentBrain {
+    /// Auto 模式只在已就绪后端中选择；无可用后端时进入仅前台模式。
+    /// 任务优先 OpenClaw，普通对话优先 Hermes，缺席时依次回退到其他可用后端。
+    static func resolvedBrain(
+        _ text: String,
+        selection: AgentBrain,
+        availability: AgentBackendAvailability? = nil
+    ) -> AgentBrain {
         guard selection == .auto else { return selection }
+        let ready = availability ?? .current
+        let candidates: [AgentBrain]
         switch route(text) {
         case .openclaw:
-            return .openclaw
+            candidates = [.openclaw, .hermes, .custom]
         case .qwen, .hermes:
-            return .hermes
+            candidates = [.hermes, .custom, .openclaw]
         }
+        return candidates.first(where: ready.isReady) ?? .none
     }
 
     /// 转发用户文本；Hermes 逐段回调，OpenClaw 通过 onChatEvent 快照回调
@@ -369,14 +501,17 @@ final class AgentBrainRouter {
         onTool: ((String) -> Void)? = nil,
         onToolResult: ((String, String) -> Void)? = nil
     ) {
+        let requestText = AgentWebSearchPolicy.preparedRequest(text)
         switch brain {
         case .auto:
+            break
+        case .none:
             break
         case .qwen:
             break
         case .hermes:
             hermesService.sendMessage(
-                text,
+                requestText,
                 image: image,
                 instructions: AgentSystemPromptBuilder.build(),
                 onDelta: onDelta,
@@ -386,7 +521,7 @@ final class AgentBrainRouter {
                 onError: onError
             )
         case .openclaw:
-            openClawService.sendChatMessage(text, image: image)
+            openClawService.sendChatMessage(requestText, image: image)
         case .custom:
             guard let config = Self.customAgentConfig() else {
                 onError("custom.agent.brain.noconfig".localized)
@@ -394,7 +529,7 @@ final class AgentBrainRouter {
             }
             CustomAgentService.shared.sendMessage(
                 config: config,
-                text: text,
+                text: requestText,
                 image: image,
                 systemPrompt: AgentSystemPromptBuilder.build(),
                 toolExecutor: { call in
@@ -415,7 +550,7 @@ final class AgentBrainRouter {
 
     /// 当前 Custom Agent 大脑的配置：优先用户选择，否则取配置列表首个
     static func customAgentConfig() -> CustomAgentConfig? {
-        let configs = CustomAgentStore.configs
+        let configs = CustomAgentStore.configs.filter(\.isValid)
         guard !configs.isEmpty else { return nil }
         if let id = AgentBrainSettings.selectedCustomAgentID,
            let config = configs.first(where: { $0.id == id }) {
@@ -431,6 +566,9 @@ final class AgentBrainRouter {
             // Auto 可能路由到任一转发大脑，全部取消
             hermesService.cancel()
             openClawService.onChatEvent = nil
+            CustomAgentService.shared.cancel()
+        case .none:
+            break
         case .qwen:
             break
         case .hermes:

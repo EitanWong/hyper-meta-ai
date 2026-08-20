@@ -5,6 +5,7 @@
  */
 
 import AVFoundation
+import Accelerate
 import Foundation
 
 @MainActor
@@ -12,6 +13,8 @@ class TTSService: NSObject, ObservableObject {
     static let shared = TTSService()
 
     @Published var isSpeaking = false
+    /// Normalized energy at the playback mixer. Used by the assistant orb.
+    @Published private(set) var outputLevel: Float = 0
 
     private let baseURL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
     private let model = "qwen3-tts-flash"
@@ -34,7 +37,12 @@ class TTSService: NSObject, ObservableObject {
     private var isPlaybackEngineRunning = false
 
     private var currentTask: Task<Void, Never>?
+    private var streamingContinuation: AsyncStream<String>.Continuation?
     private var systemSynthesizer: AVSpeechSynthesizer?
+    private var outputProxyTask: Task<Void, Never>?
+    private var lastOutputLevelUpdate = CACurrentMediaTime()
+    private var speechGeneration = 0
+    private var pendingPlaybackBuffers = 0
 
     private override init() {
         super.init()
@@ -56,15 +64,21 @@ class TTSService: NSObject, ObservableObject {
 
         playbackEngine.attach(playerNode)
         playbackEngine.connect(playerNode, to: playbackEngine.mainMixerNode, format: playbackFormat)
+        playbackEngine.mainMixerNode.installTap(onBus: 0, bufferSize: 1_024, format: nil) { [weak self] buffer, _ in
+            let level = Self.normalizedAudioLevel(buffer)
+            Task { @MainActor [weak self] in
+                self?.publishOutputLevel(level)
+            }
+        }
         playbackEngine.prepare()
 
         print("✅ [TTS] 播放引擎初始化完成: Float32 @ 24kHz")
     }
 
     /// 配置音频会话（需要在启动播放引擎之前调用）
-    private func configureAudioSession() {
+    private func configureAudioSession() async {
         do {
-            try AudioSessionCoordinator.shared.activate(.textToSpeech, profile: .playback)
+            try await AudioSessionCoordinator.shared.activateAsync(.textToSpeech, profile: .playback)
             print("✅ [TTS] Audio session 已配置")
         } catch {
             print("⚠️ [TTS] Audio session 配置失败: \(error), 继续尝试播放...")
@@ -72,10 +86,10 @@ class TTSService: NSObject, ObservableObject {
         }
     }
 
-    private func startPlaybackEngine() {
+    private func startPlaybackEngine() async {
         guard let playbackEngine = playbackEngine, !isPlaybackEngineRunning else { return }
 
-        configureAudioSession()
+        await configureAudioSession()
         do {
             try playbackEngine.start()
             playerNode?.play()
@@ -91,6 +105,48 @@ class TTSService: NSObject, ObservableObject {
         playerNode?.reset()
         playbackEngine?.stop()
         isPlaybackEngineRunning = false
+    }
+
+    nonisolated static func normalizedAudioLevel(_ buffer: AVAudioPCMBuffer) -> Float {
+        guard buffer.frameLength > 0, let channels = buffer.floatChannelData else { return 0 }
+        let frameCount = vDSP_Length(buffer.frameLength)
+        var peakRMS: Float = 0
+        for channelIndex in 0..<Int(buffer.format.channelCount) {
+            var rms: Float = 0
+            vDSP_rmsqv(channels[channelIndex], 1, &rms, frameCount)
+            peakRMS = max(peakRMS, rms)
+        }
+        return min(max(peakRMS * 8, 0), 1)
+    }
+
+    private func publishOutputLevel(_ level: Float) {
+        guard isSpeaking else {
+            outputLevel = 0
+            return
+        }
+        let now = CACurrentMediaTime()
+        guard now - lastOutputLevelUpdate >= 0.08 || level == 0 else { return }
+        lastOutputLevelUpdate = now
+        outputLevel = min(max(level, 0), 1)
+    }
+
+    /// System speech has no PCM tap; provide a low-rate visual proxy only while it speaks.
+    private func startOutputProxy() {
+        outputProxyTask?.cancel()
+        outputProxyTask = Task { @MainActor [weak self] in
+            var phase: Float = 0
+            while let self, !Task.isCancelled, self.isSpeaking {
+                phase += 0.32
+                self.outputLevel = 0.18 + 0.12 * abs(sin(phase))
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+        }
+    }
+
+    private func stopOutputLevelTracking() {
+        outputProxyTask?.cancel()
+        outputProxyTask = nil
+        outputLevel = 0
     }
 
     // MARK: - API Request Models
@@ -110,7 +166,9 @@ class TTSService: NSObject, ObservableObject {
 
     /// 预配置音频会话（在停止流之前调用）
     func prepareAudioSession() {
-        configureAudioSession()
+        Task { @MainActor [weak self] in
+            await self?.configureAudioSession()
+        }
         print("🔊 [TTS] 音频会话已预配置")
     }
 
@@ -118,18 +176,18 @@ class TTSService: NSObject, ObservableObject {
     /// - 阿里云 API：使用阿里云 qwen3-tts-flash
     /// - OpenRouter API：使用系统 TTS
     func speak(_ text: String, apiKey: String? = nil) {
-        // 取消之前的任务
-        currentTask?.cancel()
         stop()
+        let generation = speechGeneration
 
         // OpenRouter 使用系统 TTS
         if APIProviderManager.staticCurrentProvider == .openrouter {
             print("🔊 [TTS] OpenRouter mode, using system TTS")
             isSpeaking = true
-            currentTask = Task {
-                defer { AudioSessionCoordinator.shared.deactivate(.textToSpeech) }
+            currentTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.finishSpeech(generation: generation) }
+                self.startOutputProxy()
                 await fallbackToSystemTTS(text: text)
-                isSpeaking = false
             }
             return
         }
@@ -140,10 +198,11 @@ class TTSService: NSObject, ObservableObject {
         guard let finalKey = key, !finalKey.isEmpty else {
             print("❌ [TTS] No Alibaba API key, falling back to system TTS")
             isSpeaking = true
-            currentTask = Task {
-                defer { AudioSessionCoordinator.shared.deactivate(.textToSpeech) }
+            currentTask = Task { [weak self] in
+                guard let self else { return }
+                defer { self.finishSpeech(generation: generation) }
+                self.startOutputProxy()
                 await fallbackToSystemTTS(text: text)
-                isSpeaking = false
             }
             return
         }
@@ -152,38 +211,134 @@ class TTSService: NSObject, ObservableObject {
 
         isSpeaking = true
 
-        currentTask = Task {
-            defer { AudioSessionCoordinator.shared.deactivate(.textToSpeech) }
+        currentTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishSpeech(generation: generation) }
             do {
-                try await synthesizeAndPlay(text: text, apiKey: finalKey)
+                try await synthesizeAndPlay(
+                    text: text,
+                    apiKey: finalKey,
+                    generation: generation
+                )
             } catch {
                 if !Task.isCancelled {
                     print("❌ [TTS] Error: \(error)")
                     // 失败时回退到系统 TTS
+                    self.stopPlaybackEngine()
+                    self.startOutputProxy()
                     await fallbackToSystemTTS(text: text)
                 }
-            }
-            if !Task.isCancelled {
-                isSpeaking = false
             }
         }
     }
 
+    /// Queue a complete phrase as soon as it arrives from a streaming text
+    /// model. The service remains in one speaking session across phrases, so
+    /// callers can overlap language-model generation with speech playback.
+    func enqueueStreamingSpeechSegment(_ text: String, apiKey: String? = nil) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        if streamingContinuation == nil {
+            startStreamingSpeech(apiKey: apiKey)
+        }
+        streamingContinuation?.yield(trimmed)
+    }
+
+    /// Close the segment stream after the final model delta. Already queued
+    /// phrases continue playing before the audio session is released.
+    func finishStreamingSpeech() {
+        streamingContinuation?.finish()
+        streamingContinuation = nil
+    }
+
     /// 停止播报
     func stop() {
+        speechGeneration &+= 1
+        streamingContinuation?.finish()
+        streamingContinuation = nil
         currentTask?.cancel()
         currentTask = nil
+        pendingPlaybackBuffers = 0
+        stopOutputLevelTracking()
         systemSynthesizer?.stopSpeaking(at: .immediate)
         systemSynthesizer = nil
         stopPlaybackEngine()
-        AudioSessionCoordinator.shared.deactivate(.textToSpeech)
+        AudioSessionCoordinator.shared.deactivateAsync(.textToSpeech)
         isSpeaking = false
         print("🔊 [TTS] Stopped")
     }
 
+    private func finishSpeech(generation: Int) {
+        guard speechGeneration == generation else { return }
+        streamingContinuation = nil
+        currentTask = nil
+        pendingPlaybackBuffers = 0
+        systemSynthesizer = nil
+        stopPlaybackEngine()
+        stopOutputLevelTracking()
+        AudioSessionCoordinator.shared.deactivateAsync(.textToSpeech)
+        isSpeaking = false
+    }
+
     // MARK: - Private Methods
 
-    private func synthesizeAndPlay(text: String, apiKey: String) async throws {
+    private func startStreamingSpeech(apiKey: String?) {
+        stop()
+        let generation = speechGeneration
+        let streamPair = AsyncStream<String>.makeStream(bufferingPolicy: .unbounded)
+        streamingContinuation = streamPair.continuation
+        isSpeaking = true
+
+        let usesSystemSpeech = APIProviderManager.staticCurrentProvider == .openrouter
+        let selectedKey = apiKey ?? APIKeyManager.shared.getAPIKey(for: .alibaba)
+        currentTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.finishSpeech(generation: generation) }
+            for await segment in streamPair.stream {
+                guard !Task.isCancelled, self.speechGeneration == generation else { return }
+                await self.playStreamingSegment(
+                    segment,
+                    apiKey: selectedKey,
+                    usesSystemSpeech: usesSystemSpeech,
+                    generation: generation
+                )
+            }
+        }
+    }
+
+    private func playStreamingSegment(
+        _ text: String,
+        apiKey: String?,
+        usesSystemSpeech: Bool,
+        generation: Int
+    ) async {
+        if usesSystemSpeech || apiKey?.isEmpty != false {
+            startOutputProxy()
+            await fallbackToSystemTTS(text: text)
+            stopOutputLevelTracking()
+            return
+        }
+
+        do {
+            try await synthesizeAndPlay(
+                text: text,
+                apiKey: apiKey!,
+                generation: generation
+            )
+        } catch {
+            guard !Task.isCancelled, speechGeneration == generation else { return }
+            stopPlaybackEngine()
+            startOutputProxy()
+            await fallbackToSystemTTS(text: text)
+            stopOutputLevelTracking()
+        }
+    }
+
+    private func synthesizeAndPlay(
+        text: String,
+        apiKey: String,
+        generation: Int
+    ) async throws {
         guard let url = URL(string: baseURL) else {
             throw TTSError.invalidResponse
         }
@@ -222,10 +377,11 @@ class TTSService: NSObject, ObservableObject {
         // 停止当前播放并重置 playerNode 队列
         playerNode?.stop()
         playerNode?.reset()
+        pendingPlaybackBuffers = 0
 
         // 确保播放引擎在运行
         if !isPlaybackEngineRunning {
-            startPlaybackEngine()
+            await startPlaybackEngine()
         }
 
         // 提前调用 play()，让 playerNode 准备好接收 buffer
@@ -265,22 +421,23 @@ class TTSService: NSObject, ObservableObject {
                         print("🔊 [TTS] 收到第一个音频片段: \(audioData.count) bytes")
                     }
                     // 流式播放每个音频片段
-                    playAudioChunk(audioData)
+                    await playAudioChunk(audioData, generation: generation)
                 }
             }
         }
 
         if Task.isCancelled { return }
+        guard chunkCount > 0 else { throw TTSError.noAudioData }
 
         print("🔊 [TTS] Received \(chunkCount) chunks, \(totalBytes) bytes total")
 
         // 等待播放完成
-        await waitForPlaybackCompletion()
+        await waitForPlaybackCompletion(generation: generation)
 
         print("🔊 [TTS] Finished playing")
     }
 
-    private func playAudioChunk(_ audioData: Data) {
+    private func playAudioChunk(_ audioData: Data, generation: Int) async {
         // 跳过空数据
         guard !audioData.isEmpty else {
             return
@@ -299,7 +456,7 @@ class TTSService: NSObject, ObservableObject {
 
         // 确保播放引擎运行中
         if !isPlaybackEngineRunning {
-            startPlaybackEngine()
+            await startPlaybackEngine()
         }
 
         // 确保 playerNode 在播放状态（和 OmniRealtimeService 一致）
@@ -309,7 +466,20 @@ class TTSService: NSObject, ObservableObject {
         }
 
         // 调度音频缓冲区播放
-        playerNode.scheduleBuffer(pcmBuffer)
+        pendingPlaybackBuffers += 1
+        playerNode.scheduleBuffer(
+            pcmBuffer,
+            completionCallbackType: .dataPlayedBack
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.markPlaybackBufferCompleted(generation: generation)
+            }
+        }
+    }
+
+    private func markPlaybackBufferCompleted(generation: Int) {
+        guard speechGeneration == generation, pendingPlaybackBuffers > 0 else { return }
+        pendingPlaybackBuffers -= 1
     }
 
     private func createPCMBuffer(from data: Data, format: AVAudioFormat) -> AVAudioPCMBuffer? {
@@ -346,26 +516,25 @@ class TTSService: NSObject, ObservableObject {
         return buffer
     }
 
-    private func waitForPlaybackCompletion() async {
-        guard let playerNode = playerNode else { return }
+    private func waitForPlaybackCompletion(generation: Int) async {
 
-        // AVAudioPlayerNode can keep `isPlaying` true after a stalled route.
-        // A bounded wait guarantees the task and audio claim are released.
+        // A bounded drain prevents a broken route from retaining the audio claim.
         let deadline = Date().addingTimeInterval(30)
-        while playerNode.isPlaying, Date() < deadline {
+        while speechGeneration == generation,
+              pendingPlaybackBuffers > 0,
+              Date() < deadline {
             if Task.isCancelled { return }
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1秒
+            try? await Task.sleep(nanoseconds: 50_000_000)
         }
 
-        // 额外等待确保完全播放
-        try? await Task.sleep(nanoseconds: 300_000_000) // 0.3秒
+        try? await Task.sleep(nanoseconds: 80_000_000)
     }
 
     /// 回退到系统 TTS
     private func fallbackToSystemTTS(text: String) async {
         print("🔊 [TTS] Falling back to system TTS")
 
-        configureAudioSession()
+        await configureAudioSession()
 
         // 使用实例变量保持强引用，防止被释放
         systemSynthesizer = AVSpeechSynthesizer()

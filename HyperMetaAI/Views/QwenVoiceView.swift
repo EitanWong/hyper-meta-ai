@@ -1,12 +1,221 @@
 /*
  * Qwen Voice View
  * 实时语音会话页：连接 qwen-audio-agent 网关，全双工语音对话，
- * 支持镜腿单击打断 / 长按结束。
+ * 支持镜腿单击开始、再次单击结束 / 长按结束。
  */
 
 import SwiftUI
 import PhotosUI
 import AVFoundation
+
+@MainActor
+final class AgentBrainLiveTextBuffer: ObservableObject {
+    @Published private(set) var text = ""
+    private(set) var rawText = ""
+
+    private let coalescer = RealtimeTextDeltaCoalescer(
+        label: "com.lunflux.hyper-meta-ai.agent-brain-text",
+        publishingInterval: 0.06
+    )
+    private var generation = 0
+    private var isActive = false
+
+    func start() {
+        generation &+= 1
+        let activeGeneration = generation
+        isActive = true
+        text = ""
+        rawText = ""
+        coalescer.stop()
+        coalescer.start(generation: activeGeneration) { [weak self] snapshot in
+            Task { @MainActor [weak self] in
+                guard let self,
+                      self.isActive,
+                      self.generation == snapshot.sessionGeneration else { return }
+                self.text = snapshot.text
+            }
+        }
+    }
+
+    func append(_ delta: String) {
+        if !isActive { start() }
+        rawText += delta
+        _ = coalescer.append(delta)
+    }
+
+    /// OpenClaw emits cumulative snapshots rather than token deltas. Convert a
+    /// monotonic snapshot to a delta before feeding the shared UI coalescer.
+    @discardableResult
+    func appendSnapshot(_ snapshot: String) -> String {
+        if !isActive { start() }
+        guard snapshot != rawText else { return "" }
+        guard snapshot.hasPrefix(rawText) else {
+            rawText = snapshot
+            coalescer.stop()
+            let activeGeneration = generation
+            coalescer.start(generation: activeGeneration) { [weak self] update in
+                Task { @MainActor [weak self] in
+                    guard let self,
+                          self.isActive,
+                          self.generation == update.sessionGeneration else { return }
+                    self.text = update.text
+                }
+            }
+            _ = coalescer.append(snapshot)
+            return snapshot
+        }
+        let delta = String(snapshot.dropFirst(rawText.count))
+        rawText = snapshot
+        _ = coalescer.append(delta)
+        return delta
+    }
+
+    func reset() {
+        generation &+= 1
+        isActive = false
+        coalescer.stop()
+        text = ""
+        rawText = ""
+    }
+}
+
+enum AgentSpokenTextFormatter {
+    static func phrase(_ text: String) -> String {
+        var result = text.replacingOccurrences(
+            of: "\\[([^\\]]+)\\]\\(https?://[^\\s)]+\\)",
+            with: "$1",
+            options: .regularExpression
+        )
+        result = result.replacingOccurrences(
+            of: "https?://[^\\s]+",
+            with: "",
+            options: .regularExpression
+        )
+        return result
+            .replacingOccurrences(of: "【语音结论】", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isSourcesSection(_ text: String) -> Bool {
+        let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized.hasPrefix("来源")
+            || normalized.hasPrefix("参考来源")
+            || normalized.hasPrefix("sources")
+            || normalized.hasPrefix("references")
+    }
+}
+
+@MainActor
+final class AgentBrainStreamingSpeechBuffer: ObservableObject {
+    private static let minimumPhraseLength = 6
+    private static let maximumPhraseLength = 72
+    private static let boundaries = CharacterSet(charactersIn: "。！？!?；;\n")
+
+    private var pendingText = ""
+    private var assembledText = ""
+    private var isEnabled = false
+    private(set) var didStartSpeaking = false
+    private let enqueueSegment: @MainActor (String) -> Void
+    private let finishSegments: @MainActor () -> Void
+    private let stopSpeech: @MainActor () -> Void
+
+    init(
+        enqueueSegment: @escaping @MainActor (String) -> Void = {
+            TTSService.shared.enqueueStreamingSpeechSegment($0)
+        },
+        finishSegments: @escaping @MainActor () -> Void = {
+            TTSService.shared.finishStreamingSpeech()
+        },
+        stopSpeech: @escaping @MainActor () -> Void = {
+            TTSService.shared.stop()
+        }
+    ) {
+        self.enqueueSegment = enqueueSegment
+        self.finishSegments = finishSegments
+        self.stopSpeech = stopSpeech
+    }
+
+    func start(enabled: Bool) {
+        cancel()
+        isEnabled = enabled
+    }
+
+    /// Returns true only when this delta starts the first audible phrase.
+    @discardableResult
+    func append(_ delta: String) -> Bool {
+        guard isEnabled, !delta.isEmpty else { return false }
+        let wasSpeaking = didStartSpeaking
+        assembledText += delta
+        pendingText += delta
+        drainCompletePhrases()
+        return !wasSpeaking && didStartSpeaking
+    }
+
+    /// Flushes the remaining text and closes the TTS queue. Returns whether the
+    /// final response is being handled by streaming speech.
+    @discardableResult
+    func finish(finalText: String) -> Bool {
+        guard isEnabled else { return false }
+        if assembledText.isEmpty {
+            pendingText = finalText
+        } else if finalText.hasPrefix(assembledText) {
+            pendingText += String(finalText.dropFirst(assembledText.count))
+        }
+        drainCompletePhrases()
+        enqueue(pendingText)
+        pendingText = ""
+        finishSegments()
+        let usedStreamingSpeech = didStartSpeaking
+        isEnabled = false
+        assembledText = ""
+        return usedStreamingSpeech
+    }
+
+    func cancel() {
+        pendingText = ""
+        assembledText = ""
+        isEnabled = false
+        didStartSpeaking = false
+        stopSpeech()
+    }
+
+    private func drainCompletePhrases() {
+        while let boundary = nextBoundary() {
+            let end = pendingText.index(after: boundary)
+            enqueue(String(pendingText[..<end]))
+            pendingText.removeSubrange(..<end)
+        }
+        if pendingText.count >= Self.maximumPhraseLength {
+            let end = pendingText.index(
+                pendingText.startIndex,
+                offsetBy: Self.maximumPhraseLength
+            )
+            enqueue(String(pendingText[..<end]))
+            pendingText.removeSubrange(..<end)
+        }
+    }
+
+    private func nextBoundary() -> String.Index? {
+        var characterCount = 0
+        for index in pendingText.indices {
+            characterCount += 1
+            let scalar = pendingText[index].unicodeScalars.first
+            if characterCount >= Self.minimumPhraseLength,
+               scalar.map(Self.boundaries.contains) == true {
+                return index
+            }
+        }
+        return nil
+    }
+
+    private func enqueue<S: StringProtocol>(_ text: S) {
+        let phrase = AgentSpokenTextFormatter.phrase(String(text))
+        guard !phrase.isEmpty,
+              !AgentSpokenTextFormatter.isSourcesSection(phrase) else { return }
+        didStartSpeaking = true
+        enqueueSegment(phrase)
+    }
+}
 
 struct QwenVoiceView: View {
     @ObservedObject var streamViewModel: StreamSessionViewModel
@@ -16,6 +225,7 @@ struct QwenVoiceView: View {
     @ObservedObject private var ttsService = TTSService.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     /// 从 AgentChat 聊天页进入时为 true：转写由聊天页回填并持久化，本页不重复保存
     let isEmbeddedInChat: Bool
     /// 从 Hub Recent 进入时指定的历史会话 ID（优先恢复该会话）
@@ -26,7 +236,7 @@ struct QwenVoiceView: View {
     private let initialInstruction: String?
     /// 任务结果「追问」上下文（通知 / 锁屏结果卡深链带入，会话启动后注入）
     private let initialFollowUpContext: String?
-    /// 主启动路径使用单一 Metal 光球；旧的 Hub/聊天入口仍可复用详细会话界面。
+    /// 主启动路径使用低功耗几何光球；旧的 Hub/聊天入口仍可复用详细会话界面。
     private let isPrimaryExperience: Bool
     /// 系统快捷入口可要求光球页出现后立即进入全双工会话。
     private let startImmediately: Bool
@@ -72,6 +282,7 @@ struct QwenVoiceView: View {
 
     /// 回退选图后要执行的端侧视觉动作
     private enum VoiceFallbackVisionAction {
+        case vision
         case ocr
         case scene
     }
@@ -93,8 +304,11 @@ struct QwenVoiceView: View {
     @State private var turnMachine = AgentTurnStateMachine()
     /// 大脑模式：Qwen 原生实时语音 / 听写转发给 Hermes / OpenClaw
     @State private var brain = AgentBrainSettings.selected
-    /// 大脑回复流式文本（live 预览）
-    @State private var brainLiveText = ""
+    /// 会话建立时锁定的显式后台；nil 表示由内置 Qwen Realtime 负责回复。
+    @State private var activeForwardingBrain: AgentBrain?
+    /// 大脑回复流式文本（live 预览，限频发布以避免逐 token 重绘整页）
+    @StateObject private var brainTextBuffer = AgentBrainLiveTextBuffer()
+    @StateObject private var brainSpeechBuffer = AgentBrainStreamingSpeechBuffer()
     /// 已转发的最后一条用户文本（防重复转发）
     @State private var lastForwardedUserText = ""
     /// 审批决策成功后的镜片反馈（在 pendingPermission 清空时展示一次）
@@ -231,10 +445,14 @@ struct QwenVoiceView: View {
                         .background(Color(.systemGray6))
                         .cornerRadius(8)
                     }
-                    if AgentBrainRouter.isForwarding(to: brain) {
+                    if isForwardingMode {
                         Text("qwen.voice.brain.forward".localized)
                             .font(.system(size: 11))
                             .foregroundColor(.blue)
+                    } else if brain == .auto || brain == .none {
+                        Text("qwen.voice.brain.frontend_only".localized)
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
                     }
                     if brain == .custom {
                         Menu {
@@ -405,10 +623,10 @@ struct QwenVoiceView: View {
                     .padding(.horizontal, 16)
                 }
 
-                // 眼镜未连接提示（语音仍可用，镜腿触发不可用）
+                // 手机独立模式：语音与选图保持可用，仅关闭眼镜专属控制。
                 if !streamViewModel.hasActiveDevice {
                     HStack(spacing: 8) {
-                        Image(systemName: "smartglasses")
+                        Image(systemName: "iphone")
                             .font(.system(size: 12))
                         Text("qwen.voice.glasses.offline".localized)
                             .font(.system(size: 13))
@@ -416,7 +634,7 @@ struct QwenVoiceView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(Color.orange.opacity(0.12))
+                    .background(Color.blue.opacity(0.10))
                 }
 
                 // 镜腿触发提示
@@ -628,9 +846,9 @@ struct QwenVoiceView: View {
                                 if let live = livePreview {
                                     transcriptBubble(live, isLive: true)
                                 }
-                                if !brainLiveText.isEmpty {
+                                if !brainTextBuffer.text.isEmpty {
                                     transcriptBubble(
-                                        QwenTranscriptItem(role: .assistant, text: brainLiveText),
+                                        QwenTranscriptItem(role: .assistant, text: brainTextBuffer.text),
                                         isLive: true
                                     )
                                 }
@@ -664,7 +882,9 @@ struct QwenVoiceView: View {
                                     ProgressView()
                                         .tint(.white)
                                 } else {
-                                    Image(systemName: "camera.fill")
+                                    Image(systemName: runtimeCapabilities.preferredVisualInput == .glassesCamera
+                                        ? "camera.fill"
+                                        : "photo.on.rectangle")
                                         .font(.system(size: 24))
                                         .foregroundColor(session.isActive ? .white : .secondary)
                                 }
@@ -768,84 +988,78 @@ struct QwenVoiceView: View {
     // MARK: - Primary Orb Experience
 
     private var primaryOrbExperience: some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea()
+        GeometryReader { proxy in
+            ZStack {
+                Color(uiColor: .systemBackground)
+                    .ignoresSafeArea()
 
-            LinearGradient(
-                colors: [
-                    Color(red: 0.015, green: 0.025, blue: 0.055),
-                    Color.black,
-                    Color(red: 0.02, green: 0.01, blue: 0.045),
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+                VStack(spacing: 0) {
+                    primaryTopBar
 
-            VStack(spacing: 0) {
-                primaryTopBar
+                    Spacer(minLength: 18)
 
-                Spacer(minLength: 12)
-
-                Button {
-                    handlePrimaryOrbTap()
-                } label: {
-                    MetalOrbView(
-                        state: primaryOrbState,
-                        intensity: primaryOrbIntensity,
-                        audioLevel: session.inputLevel
-                    )
-                        .frame(maxWidth: 430, maxHeight: 430)
-                        .aspectRatio(1, contentMode: .fit)
+                    Button {
+                        handlePrimaryOrbTap()
+                    } label: {
+                        AssistantOrbView(
+                            state: primaryOrbState,
+                            intensity: primaryOrbIntensity,
+                            audioLevel: primaryOrbAudioLevel
+                        )
+                        .equatable()
+                        .frame(
+                            width: primaryOrbDiameter(in: proxy.size),
+                            height: primaryOrbDiameter(in: proxy.size)
+                        )
                         .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(primaryControlTitle)
+                    .accessibilityHint(primaryOrbAccessibilityHint)
+                    .accessibilityIdentifier("assistant.orb.primary")
+
+                    VStack(spacing: 6) {
+                        Text(primaryStatusTitle)
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                            .minimumScaleFactor(0.85)
+
+                        if session.isActive || primaryVisibleTask != nil {
+                            Text(primaryStatusDetail)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                                .minimumScaleFactor(0.85)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+
+                    Spacer(minLength: 10)
+
+                    if let permission = session.pendingPermission {
+                        primaryPermissionPanel(permission)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else if let task = primaryVisibleTask {
+                        primaryTaskPanel(task)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else if let feedback = primaryFeedback ?? triggerBanner {
+                        Text(feedback)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: 340, minHeight: 32)
+                    }
+
+                    Spacer(minLength: 18)
+
+                    primaryBottomControls
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel(primaryControlTitle)
-                .accessibilityHint(session.isActive ? "点按暂停或继续聆听" : "点按开始全双工语音会话")
-                .accessibilityIdentifier("assistant.orb.primary")
-
-                VStack(spacing: 8) {
-                    Text(primaryStatusTitle)
-                        .font(.system(size: 19, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .contentTransition(.numericText())
-
-                    Text(primaryStatusDetail)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                        .frame(minHeight: 34)
-                }
-                .padding(.horizontal, 32)
-
-                Spacer(minLength: 12)
-
-                if let permission = session.pendingPermission {
-                    primaryPermissionPanel(permission)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else if let task = primaryVisibleTask {
-                    primaryTaskPanel(task)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                } else if let feedback = primaryFeedback ?? triggerBanner {
-                    Text(feedback)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 11)
-                        .frame(maxWidth: 340)
-                        .primaryGlass(cornerRadius: 18)
-                }
-
-                Spacer(minLength: 20)
-
-                primaryBottomControls
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 16)
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 6)
-            .padding(.bottom, 10)
         }
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showSimplifiedSettings) {
@@ -862,9 +1076,9 @@ struct QwenVoiceView: View {
                 ScrollView {
                     if session.sortedAgentTasks.isEmpty {
                         ContentUnavailableView(
-                            "暂无任务",
+                            "assistant.primary.tasks.empty.title".localized,
                             systemImage: "checkmark.circle",
-                            description: Text("后台 Agent 的进度与结果会显示在这里。")
+                            description: Text("assistant.primary.tasks.empty.detail".localized)
                         )
                         .padding(.top, 80)
                     } else {
@@ -880,11 +1094,11 @@ struct QwenVoiceView: View {
                         .padding(20)
                     }
                 }
-                .navigationTitle("任务")
+                .navigationTitle("assistant.primary.tasks.title".localized)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("完成") { showTaskDetails = false }
+                        Button("assistant.primary.done".localized) { showTaskDetails = false }
                     }
                 }
             }
@@ -892,122 +1106,119 @@ struct QwenVoiceView: View {
         }
     }
 
+    private var runtimeCapabilities: AssistantRuntimeCapabilities {
+        AssistantRuntimePolicy.resolve(hasActiveGlasses: streamViewModel.hasActiveDevice)
+    }
+
     private var primaryTopBar: some View {
         HStack {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(primaryStatusColor)
-                    .frame(width: 7, height: 7)
-                Text("HYPER")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.88))
-            }
+            Text("Hyper")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
 
             Spacer()
 
-            HStack(spacing: 12) {
-                if streamViewModel.hasActiveDevice {
-                    Image(systemName: "eyeglasses")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.62))
-                        .accessibilityLabel("眼镜已连接")
+            HStack(spacing: 6) {
+                if dynamicTypeSize.isAccessibilitySize {
+                    Image(
+                        systemName: runtimeCapabilities.mode == .glassesEnhanced ? "eyeglasses" : "iphone"
+                    )
+                    .font(.title3)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .frame(width: 44, height: 44)
+                    .accessibilityLabel(primaryDeviceLabel)
+                } else {
+                    Label(
+                        primaryDeviceLabel,
+                        systemImage: runtimeCapabilities.mode == .glassesEnhanced ? "eyeglasses" : "iphone"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
                 }
 
                 Button {
                     showSimplifiedSettings = true
                 } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.84))
-                        .frame(width: 38, height: 38)
-                        .primaryGlass(cornerRadius: 19, interactive: true)
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.thinMaterial, in: Circle())
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("设置")
+                .accessibilityLabel("settings.title".localized)
                 .accessibilityIdentifier("assistant.settings")
             }
         }
         .frame(height: 44)
     }
 
+    @ViewBuilder
     private var primaryBottomControls: some View {
-        HStack(spacing: 14) {
-            Button {
-                if session.isActive {
-                    session.toggleInterrupt()
-                } else {
-                    startPrimarySession()
-                }
-            } label: {
-                Image(systemName: primaryControlSymbol)
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
-                    .primaryGlass(cornerRadius: 25, interactive: true)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(primaryControlTitle)
-
-            if AgentVisionSettings.injectionEnabled {
-                Button {
-                    Task { await captureAndSendVision() }
-                } label: {
-                    Group {
-                        if isCapturingVision {
-                            ProgressView().tint(.white)
-                        } else {
-                            Image(systemName: "viewfinder")
-                                .font(.system(size: 19, weight: .semibold))
-                        }
-                    }
-                    .foregroundStyle(.white)
-                    .frame(width: 50, height: 50)
-                    .primaryGlass(cornerRadius: 25, interactive: true)
-                }
-                .buttonStyle(.plain)
-                .disabled(!session.isActive || isCapturingVision)
-                .opacity(session.isActive ? 1 : 0.42)
-                .accessibilityLabel("读取眼镜视野")
-            }
-
-            if !session.sortedAgentTasks.isEmpty {
-                Button {
-                    showTaskDetails = true
-                } label: {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "list.bullet.clipboard")
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 50, height: 50)
-                            .primaryGlass(cornerRadius: 25, interactive: true)
-                        if session.runningTaskCount > 0 {
-                            Text("\(session.runningTaskCount)")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.black)
-                                .frame(minWidth: 17, minHeight: 17)
-                                .background(.white, in: Circle())
-                        }
+        if session.isActive {
+            HStack(spacing: 24) {
+                if AgentVisionSettings.injectionEnabled {
+                    primaryIconButton(
+                        symbol: isCapturingVision
+                            ? "ellipsis"
+                            : (runtimeCapabilities.preferredVisualInput == .glassesCamera
+                                ? "viewfinder"
+                                : "photo.on.rectangle"),
+                        title: primaryVisionControlTitle,
+                        isEnabled: !isCapturingVision
+                    ) {
+                        Task { await captureAndSendVision() }
                     }
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("任务")
-            }
 
-            if session.isActive {
-                Button {
+                primaryIconButton(
+                    symbol: "stop.fill",
+                    title: "assistant.primary.end".localized,
+                    tint: .red
+                ) {
                     endVoiceSession()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 50, height: 50)
-                        .primaryGlass(cornerRadius: 25, interactive: true, tint: .red.opacity(0.22))
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("结束会话")
             }
+            .frame(minHeight: 56)
+        } else {
+            Button {
+                startPrimarySession()
+            } label: {
+                Label(primaryControlTitle, systemImage: "waveform")
+                    .font(.headline)
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+                    .frame(maxWidth: 260, minHeight: 52)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(.white)
+            .foregroundStyle(.black)
+            .accessibilityLabel(primaryControlTitle)
         }
-        .frame(minHeight: 58)
+    }
+
+    private func primaryIconButton(
+        symbol: String,
+        title: String,
+        tint: Color = .white,
+        isEnabled: Bool = true,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(tint)
+                .frame(width: 56, height: 56)
+                .background(.thinMaterial, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.42)
+        .accessibilityLabel(title)
     }
 
     private func primaryTaskPanel(_ task: QwenAgentTask) -> some View {
@@ -1016,9 +1227,8 @@ struct QwenVoiceView: View {
         } label: {
             HStack(spacing: 12) {
                 if task.isActive {
-                    ProgressView()
-                        .tint(.white)
-                        .controlSize(.small)
+                    Image(systemName: "clock")
+                        .foregroundStyle(.blue)
                 } else {
                     Image(systemName: primaryTaskSymbol(task.status))
                         .foregroundStyle(primaryTaskColor(task.status))
@@ -1042,31 +1252,31 @@ struct QwenVoiceView: View {
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 12)
-            .frame(maxWidth: 340)
-            .primaryGlass(cornerRadius: 18, interactive: true)
+            .frame(maxWidth: 360)
+            .assistantSurface(cornerRadius: 8)
         }
         .buttonStyle(.plain)
     }
 
     private func primaryPermissionPanel(_ request: QwenPermissionRequest) -> some View {
         VStack(alignment: .leading, spacing: 11) {
-            Label("需要确认", systemImage: "hand.raised.fill")
-                .font(.system(size: 13, weight: .semibold))
+            Label("assistant.primary.permission.title".localized, systemImage: "hand.raised.fill")
+                .font(.footnote.weight(.semibold))
                 .foregroundStyle(.white)
             Text(request.permission.summary)
-                .font(.system(size: 12))
+                .font(.footnote)
                 .foregroundStyle(.white.opacity(0.66))
                 .lineLimit(2)
 
             HStack(spacing: 10) {
-                Button("拒绝") {
+                Button("assistant.primary.permission.deny".localized) {
                     Task { await session.respondToPermission(.deny) }
                 }
                 .buttonStyle(.bordered)
                 .tint(.white.opacity(0.8))
                 .frame(maxWidth: .infinity)
 
-                Button("允许") {
+                Button("assistant.primary.permission.allow".localized) {
                     Task { await session.respondToPermission(.allow) }
                 }
                 .buttonStyle(.borderedProminent)
@@ -1077,21 +1287,36 @@ struct QwenVoiceView: View {
             .disabled(request.isSubmitting)
         }
         .padding(15)
-        .frame(maxWidth: 340)
-        .primaryGlass(cornerRadius: 18)
+        .frame(maxWidth: 360)
+        .assistantSurface(cornerRadius: 8)
     }
 
     private var primaryVisibleTask: QwenAgentTask? {
         session.sortedAgentTasks.first
     }
 
+    private func primaryOrbDiameter(in size: CGSize) -> CGFloat {
+        let heightFraction: CGFloat = hasPrimarySupplementalPanel ? 0.27 : 0.37
+        let heightLimit = size.height * heightFraction
+        return min(292, max(184, min(size.width - 72, heightLimit)))
+    }
+
+    private var hasPrimarySupplementalPanel: Bool {
+        session.pendingPermission != nil
+            || primaryVisibleTask != nil
+            || primaryFeedback != nil
+            || triggerBanner != nil
+    }
+
     private var primaryOrbState: AssistantOrbState {
         if case .failed = session.connectionState { return .error }
         if session.runningTaskCount > 0 { return .working }
         if session.isSpeaking || ttsService.isSpeaking { return .speaking }
+        if session.providerVoiceState == "thinking" { return .thinking }
         if turnMachine.phase == .thinking { return .thinking }
-        if session.isActive && !session.isInputPaused { return .listening }
         if case .connecting = session.connectionState { return .connecting }
+        if case .waking = session.connectionState { return .connecting }
+        if session.isInputActive || session.providerVoiceState == "listening" { return .listening }
         return .idle
     }
 
@@ -1102,23 +1327,41 @@ struct QwenVoiceView: View {
         return 0.5
     }
 
+    private var primaryOrbAudioLevel: Float {
+        if session.isSpeaking { return session.outputLevel }
+        if ttsService.isSpeaking { return ttsService.outputLevel }
+        return session.inputLevel
+    }
+
     private var primaryStatusTitle: String {
         if let feedback = primaryFeedback { return feedback }
-        if session.isSleeping { return "待命中" }
-        if session.isInputPaused { return "已暂停" }
-        if session.runningTaskCount > 0 { return "正在执行任务" }
-        if session.isSpeaking || ttsService.isSpeaking { return "正在回应" }
-        if turnMachine.phase == .thinking { return "正在思考" }
+        if session.isSleeping { return "qwen.voice.sleeping".localized }
+        if session.runningTaskCount > 0 { return "assistant.primary.status.working".localized }
+        if session.isSpeaking || ttsService.isSpeaking { return "assistant.primary.status.speaking".localized }
+        if session.providerVoiceState == "thinking" { return "assistant.primary.status.thinking".localized }
+        if turnMachine.phase == .thinking { return "assistant.primary.status.thinking".localized }
+        if session.isInputActive || session.providerVoiceState == "listening" {
+            return "assistant.primary.status.listening".localized
+        }
         switch session.connectionState {
-        case .connecting: return "正在连接"
-        case .failed: return "连接异常"
-        case .connected where session.isActive: return "正在聆听"
-        case .connected: return "准备就绪"
-        case .disconnected: return "点按开始"
+        case .connecting: return "assistant.primary.status.connecting".localized
+        case .waking: return "assistant.primary.status.waking".localized
+        case .sleeping: return "qwen.voice.sleeping".localized
+        case .failed: return "assistant.primary.status.error".localized
+        case .connected: return "assistant.primary.status.ready".localized
+        case .disconnected: return "assistant.primary.status.start".localized
         }
     }
 
     private var primaryStatusDetail: String {
+        if let error = session.errorMessage,
+           !error.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return error
+        }
+        if case .failed(let message) = session.connectionState,
+           !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return message
+        }
         if let task = primaryVisibleTask, task.isActive {
             return task.resultText?.isEmpty == false ? task.resultText! : task.statusLabel
         }
@@ -1129,43 +1372,39 @@ struct QwenVoiceView: View {
             return session.lastUserText
         }
         if streamViewModel.hasActiveDevice {
-            return "语音与眼镜视觉已就绪"
+            return "assistant.primary.detail.glasses".localized
         }
-        return "全双工语音 · Agent 调度"
+        return "assistant.primary.detail.phone".localized
     }
 
-    private var primaryStatusColor: Color {
-        switch primaryOrbState {
-        case .error: return .red
-        case .connecting: return .orange
-        case .idle: return .white.opacity(0.35)
-        default: return .green
-        }
-    }
-
-    private var primaryControlSymbol: String {
-        if !session.isActive { return "waveform" }
-        return session.isInputPaused ? "mic.fill" : "pause.fill"
+    private var primaryDeviceLabel: String {
+        runtimeCapabilities.mode == .glassesEnhanced
+            ? "assistant.primary.device.glasses".localized
+            : "assistant.primary.device.phone".localized
     }
 
     private var primaryControlTitle: String {
-        if !session.isActive { return "开始会话" }
-        return session.isInputPaused ? "继续聆听" : "暂停聆听"
+        if !session.isActive { return "assistant.primary.start".localized }
+        return "assistant.primary.end".localized
+    }
+
+    private var primaryVisionControlTitle: String {
+        runtimeCapabilities.preferredVisualInput == .glassesCamera
+            ? "assistant.primary.vision.glasses".localized
+            : "assistant.primary.vision.photo".localized
+    }
+
+    private var primaryOrbAccessibilityHint: String {
+        session.isActive
+            ? "assistant.primary.orb.hint.active".localized
+            : "assistant.primary.orb.hint.inactive".localized
     }
 
     private func handlePrimaryOrbTap() {
         if !session.isActive {
             startPrimarySession()
-        } else if session.isInputPaused {
-            session.resume()
-            primaryFeedback = "继续聆听"
-        } else if session.isSpeaking || ttsService.isSpeaking {
-            session.bargeIn()
-            TTSService.shared.stop()
-            primaryFeedback = "已打断"
         } else {
-            session.interrupt()
-            primaryFeedback = "已暂停"
+            endVoiceSession()
         }
         clearPrimaryFeedbackLater()
     }
@@ -1173,7 +1412,7 @@ struct QwenVoiceView: View {
     private func startPrimarySession() {
         AgentPresenceSettings.presenceEnabled = true
         turnMachine.turnStarted()
-        primaryFeedback = "正在连接"
+        primaryFeedback = "assistant.primary.feedback.connecting".localized
         clearPrimaryFeedbackLater()
         Task { @MainActor in
             let permission: AVAudioSession.RecordPermission
@@ -1209,7 +1448,7 @@ struct QwenVoiceView: View {
 
             guard granted else {
                 turnMachine.turnEnded()
-                primaryFeedback = "需要麦克风权限"
+                primaryFeedback = "assistant.primary.feedback.microphone".localized
                 clearPrimaryFeedbackLater()
                 return
             }
@@ -1290,9 +1529,14 @@ struct QwenVoiceView: View {
             streamViewModel.consumeUnexpectedDeviceEndFlag()
             // 轻量会话：让镜腿触发在语音页始终可用
             Task { await streamViewModel.acquireAgentTriggerSession() }
-            // 大脑模式：听写转发时关闭 Qwen 语音回复；OpenClaw 接管聊天事件
-            session.outputEnabled = !AgentBrainRouter.isForwarding(to: brain)
-            if brain == .openclaw || brain == .auto {
+            // Auto/default keeps the official Qwen realtime output path. Only a
+            // ready, explicitly selected backend may take ownership for a session.
+            activeForwardingBrain = AgentVoiceBrainPolicy.forwardingTarget(
+                selection: brain,
+                availability: .current
+            )
+            session.outputEnabled = activeForwardingBrain == nil
+            if activeForwardingBrain == .openclaw {
                 openClawService.onChatEvent = { [self] snapshot in
                     handleOpenClawChatEvent(snapshot)
                 }
@@ -1303,6 +1547,9 @@ struct QwenVoiceView: View {
                 let error = AgentTurnErrorClassifier.idleTimeout()
                 let hint = error.recoveryKey.map { $0.localized } ?? ""
                 self.showTriggerBanner(error.messageKey.localized + (hint.isEmpty ? "" : "（" + hint + "）"))
+            }
+            session.onVisionRequest = { [self] intent in
+                handleVisionRequest(intent)
             }
             if let initialHistoryRecordID {
                 selectedHistoryRecordID = initialHistoryRecordID
@@ -1336,8 +1583,9 @@ struct QwenVoiceView: View {
             Task { await streamViewModel.releaseAgentTriggerSession() }
             bannerDismissTask?.cancel()
             session.onIdleTimeout = nil
+            session.onVisionRequest = nil
             openClawService.onChatEvent = nil
-            AgentBrainRouter.shared.cancel(to: brain)
+            AgentBrainRouter.shared.cancel(to: activeForwardingBrain ?? brain)
             TTSService.shared.stop()
             session.stop()
             extractMemoryCandidates()
@@ -1351,6 +1599,7 @@ struct QwenVoiceView: View {
         .onReceive(NotificationCenter.default.publisher(for: .agentVisionDataCleared)) { _ in
             // 视觉数据清理：丢弃语音页保留的最近画面帧（帧仅内存持有）
             lastVisionImage = nil
+            session.latestVisionFrame = nil
         }
         .onReceive(NotificationCenter.default.publisher(
             for: AgentWearableTriggerCenter.repeatReplyNotification
@@ -1375,6 +1624,10 @@ struct QwenVoiceView: View {
                 }
                 defer { voiceFallbackPhotoItem = nil }
                 switch voiceFallbackAction {
+                case .vision:
+                    isCapturingVision = true
+                    defer { isCapturingVision = false }
+                    await processVoiceVision(image)
                 case .ocr:
                     isOCRing = true
                     defer { isOCRing = false }
@@ -1425,6 +1678,22 @@ struct QwenVoiceView: View {
                 reevaluateDeferredApproval()
             }
         }
+        .onChange(of: session.providerVoiceState) { _, state in
+            guard session.isActive, !isForwardingMode else { return }
+            switch state {
+            case "listening":
+                turnMachine.turnStarted()
+                AgentDisplayHub.shared.show(.listening)
+            case "thinking":
+                turnMachine.thinkingStarted()
+                AgentDisplayHub.shared.show(.thinking)
+            case "idle" where !session.isSpeaking:
+                turnMachine.turnEnded()
+                AgentDisplayHub.shared.show(.idle)
+            default:
+                break
+            }
+        }
         .onChange(of: session.pendingPermission) { _, pending in
             // 权限请求到达/处理完成：会话空闲直接弹审批卡；忙碌（说话/播报）先延迟，空闲补弹
             if let pending {
@@ -1473,7 +1742,7 @@ struct QwenVoiceView: View {
             guard let notice else { return }
             AgentTaskLensPresenter.handleAcknowledgmentChange(
                 title: notice.title,
-                announceByApp: AgentBrainRouter.isForwarding(to: brain),
+                announceByApp: isForwardingMode,
                 isSpeaking: session.isSpeaking,
                 isInputActive: session.isInputActive,
                 ttsSpeaking: TTSService.shared.isSpeaking
@@ -1491,7 +1760,7 @@ struct QwenVoiceView: View {
                 text: notice.text,
                 lastTaskResultText: session.lastTaskResultText,
                 runningTaskCount: session.runningTaskCount,
-                announceByApp: AgentBrainRouter.isForwarding(to: brain),
+                announceByApp: isForwardingMode,
                 isSpeaking: session.isSpeaking,
                 isInputActive: session.isInputActive,
                 ttsSpeaking: TTSService.shared.isSpeaking
@@ -1515,18 +1784,22 @@ struct QwenVoiceView: View {
             )
         }
         .onChange(of: scenePhase) { _, phase in
-            // 退后台立即停止录音与连接（隐私与资源）
-            if phase == .background {
-                session.stop()
+            // UIBackgroundModes.audio keeps the explicit voice session alive while locked.
+            // Returning foreground only repairs an audio/network path interrupted by the OS.
+            if phase == .active {
+                session.recoverAfterForeground()
             }
         }
         .onChange(of: brain) { _, newBrain in
+            if let activeForwardingBrain {
+                AgentBrainRouter.shared.cancel(to: activeForwardingBrain)
+            }
             AgentBrainSettings.selected = newBrain
             applyBrain(newBrain)
         }
         .onChange(of: session.transcriptLog.count) { _, _ in
             // 听写模式：用户每段最终转写转发给大脑
-            guard AgentBrainRouter.isForwarding(to: brain),
+            guard isForwardingMode,
                   let last = session.transcriptLog.last,
                   last.role == .user,
                   last.text != lastForwardedUserText else { return }
@@ -1639,12 +1912,6 @@ struct QwenVoiceView: View {
                 handleNotificationCommand(notificationCommand)
                 return
             }
-            // 端侧场景识别：「看看这是什么 / 识别场景」本地抓帧识别并播报，不转发
-            if AgentVisionSceneCommandParser.parse(last.text) {
-                lastForwardedUserText = last.text
-                Task { await runVoiceScene() }
-                return
-            }
             lastForwardedUserText = last.text
             // 任务完成后的追问：把最新任务结果前置给大脑（如「展开第三条」）
             forwardToBrain(session.followUpMessage(last.text))
@@ -1653,10 +1920,20 @@ struct QwenVoiceView: View {
 
     // MARK: - Computed
 
+    /// Match behavior to the Realtime connection's output mode for the full session.
+    private var isForwardingMode: Bool {
+        if session.isActive { return activeForwardingBrain != nil }
+        return AgentVoiceBrainPolicy.forwardingTarget(
+            selection: brain,
+            availability: .current
+        ) != nil
+    }
+
     private var statusColor: Color {
         switch session.connectionState {
         case .connected: return .green
-        case .connecting: return .orange
+        case .connecting, .waking: return .orange
+        case .sleeping: return .gray
         case .failed: return .red
         case .disconnected: return .gray
         }
@@ -1666,6 +1943,8 @@ struct QwenVoiceView: View {
         switch session.connectionState {
         case .connected: return "qwen.voice.connected".localized
         case .connecting: return "qwen.voice.connecting".localized
+        case .sleeping: return "qwen.voice.sleeping".localized
+        case .waking: return "qwen.voice.waking".localized
         case .failed(let message): return message
         case .disconnected: return "qwen.voice.disconnected".localized
         }
@@ -1775,9 +2054,15 @@ struct QwenVoiceView: View {
                   revoked: AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id)
               ),
               session.isActive,
-              !isCapturingVision else { return }
-        guard !VisionAPIConfig.apiKey.isEmpty else {
+              !isCapturingVision,
+              !isAnalyzingScene,
+              !isOCRing else { return }
+        guard session.supportsDirectVision || !VisionAPIConfig.apiKey.isEmpty else {
             showTriggerBanner("qwen.voice.vision.noapikey".localized)
+            return
+        }
+        guard runtimeCapabilities.preferredVisualInput == .glassesCamera else {
+            presentVoiceFallbackPicker(for: .vision)
             return
         }
 
@@ -1785,11 +2070,23 @@ struct QwenVoiceView: View {
         defer { isCapturingVision = false }
 
         guard let frame = await captureVoiceFrame() else {
-            showTriggerBanner("qwen.voice.vision.noframe".localized)
+            presentVoiceFallbackPicker(for: .vision)
             return
         }
+        await processVoiceVision(frame)
+    }
+
+    /// Sends one visual frame through the realtime provider when possible, or
+    /// through the asynchronous vision/delegation path otherwise.
+    private func processVoiceVision(_ frame: UIImage) async {
         lastVisionImage = frame
         session.latestVisionFrame = frame
+
+        if !isForwardingMode,
+           session.sendVisionFrame(frame, prompt: "qwen.voice.vision.prompt".localized) {
+            showTriggerBanner("qwen.voice.vision.sent".localized)
+            return
+        }
 
         do {
             let description = try await VisionAPIService().analyzeImage(
@@ -1797,7 +2094,7 @@ struct QwenVoiceView: View {
                 prompt: "qwen.voice.vision.prompt".localized
             )
             let context = "qwen.voice.vision.context".localized + description
-            if AgentBrainRouter.isForwarding(to: brain) {
+            if isForwardingMode {
                 // 大脑模式：视野描述作为上下文直接转发给大脑
                 session.appendUserText(
                     context,
@@ -1876,10 +2173,14 @@ struct QwenVoiceView: View {
     // MARK: - 端侧取词 OCR
 
     /// 抓帧 → 场景识别 → 朗读（大脑模式）/ 转发给会话 Agent，并上镜片展示
-    private func runVoiceScene() async {
+    private func runVoiceScene(request: String? = nil) async {
         guard session.isActive, !isAnalyzingScene, !isOCRing, !isCapturingVision else { return }
         guard !AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id) else {
             showTriggerBanner("agent.vision.revoked".localized)
+            return
+        }
+        guard runtimeCapabilities.preferredVisualInput == .glassesCamera else {
+            presentVoiceFallbackPicker(for: .scene)
             return
         }
         isAnalyzingScene = true
@@ -1891,7 +2192,12 @@ struct QwenVoiceView: View {
         }
         lastVisionImage = frame
         session.latestVisionFrame = frame
-        await processVoiceScene(frame)
+        if let request, !isForwardingMode,
+           session.sendVisionFrame(frame, prompt: request) {
+            showTriggerBanner("qwen.voice.vision.sent".localized)
+            return
+        }
+        await processVoiceScene(frame, request: request)
     }
 
     /// 相册选图回退：无眼镜画面帧时让用户从相册选一张，执行相同动作
@@ -1901,7 +2207,7 @@ struct QwenVoiceView: View {
     }
 
     /// 对给定帧执行场景识别（眼镜帧与相册回退共用）
-    private func processVoiceScene(_ frame: UIImage) async {
+    private func processVoiceScene(_ frame: UIImage, request: String? = nil) async {
         let result = await VisionSceneService.analyze(frame)
         let summary = VisionSceneTextProcessor.summaryText(from: result)
         guard !summary.isEmpty else {
@@ -1915,25 +2221,30 @@ struct QwenVoiceView: View {
             text: VisionSceneTextProcessor.displayText(from: result),
             fallback: .idle
         )
-        if AgentBrainRouter.isForwarding(to: brain) {
+        let context = request.map { $0 + "\n" + summary } ?? summary
+        if isForwardingMode {
             // 大脑模式：先朗读识别结果，再作为上下文转发给大脑（可追问）
             if AgentVoiceSettings.replyEnabled {
                 TTSService.shared.stop()
                 TTSService.shared.speak(summary)
             }
-            session.appendUserText(summary, label: "agent.vision.scene.sent".localized, kind: .vision)
-            lastForwardedUserText = summary
-            forwardToBrain(summary)
+            session.appendUserText(context, label: "agent.vision.scene.sent".localized, kind: .vision)
+            lastForwardedUserText = context
+            forwardToBrain(context)
         } else {
-            session.sendText(summary, label: "agent.vision.scene.sent".localized, kind: .vision)
+            session.sendText(context, label: "agent.vision.scene.sent".localized, kind: .vision)
         }
     }
 
     /// 抓帧 → OCR → 朗读（大脑模式）/ 转发给会话 Agent，并上镜片展示
-    private func runVoiceOCR() async {
-        guard session.isActive, !isOCRing, !isCapturingVision else { return }
+    private func runVoiceOCR(request: String? = nil) async {
+        guard session.isActive, !isOCRing, !isAnalyzingScene, !isCapturingVision else { return }
         guard !AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id) else {
             showTriggerBanner("agent.vision.revoked".localized)
+            return
+        }
+        guard runtimeCapabilities.preferredVisualInput == .glassesCamera else {
+            presentVoiceFallbackPicker(for: .ocr)
             return
         }
         isOCRing = true
@@ -1945,11 +2256,16 @@ struct QwenVoiceView: View {
         }
         lastVisionImage = frame
         session.latestVisionFrame = frame
-        await processVoiceOCR(frame)
+        if let request, !isForwardingMode,
+           session.sendVisionFrame(frame, prompt: request) {
+            showTriggerBanner("qwen.voice.vision.sent".localized)
+            return
+        }
+        await processVoiceOCR(frame, request: request)
     }
 
     /// 对给定帧执行取词（眼镜帧与相册回退共用）
-    private func processVoiceOCR(_ frame: UIImage) async {
+    private func processVoiceOCR(_ frame: UIImage, request: String? = nil) async {
         let lines = await VisionOCRService.recognizeText(in: frame)
         let text = VisionOCRTextProcessor.normalizedText(from: lines.map(\.text))
         guard !text.isEmpty else {
@@ -1963,17 +2279,18 @@ struct QwenVoiceView: View {
             text: VisionOCRTextProcessor.displayText(from: text),
             fallback: .idle
         )
-        if AgentBrainRouter.isForwarding(to: brain) {
+        let context = request.map { $0 + "\n" + text } ?? text
+        if isForwardingMode {
             // 大脑模式：先朗读识别文字，再作为上下文转发给大脑（可追问翻译/总结）
             if AgentVoiceSettings.replyEnabled {
                 TTSService.shared.stop()
                 TTSService.shared.speak(text)
             }
-            session.appendUserText(text, label: "agent.vision.ocr.sent".localized, kind: .vision)
-            lastForwardedUserText = text
-            forwardToBrain(text)
+            session.appendUserText(context, label: "agent.vision.ocr.sent".localized, kind: .vision)
+            lastForwardedUserText = context
+            forwardToBrain(context)
         } else {
-            session.sendText(text, label: "agent.vision.ocr.sent".localized, kind: .vision)
+            session.sendText(context, label: "agent.vision.ocr.sent".localized, kind: .vision)
         }
     }
 
@@ -1984,7 +2301,7 @@ struct QwenVoiceView: View {
             return
         }
         let instruction = VisionTranslationPlanner.translateInstruction(for: text)
-        if AgentBrainRouter.isForwarding(to: brain) {
+        if isForwardingMode {
             session.appendUserText(
                 instruction,
                 label: "agent.vision.translate.sent".localized,
@@ -2019,6 +2336,22 @@ struct QwenVoiceView: View {
         return streamViewModel.currentVideoFrame
     }
 
+    private func handleVisionRequest(_ intent: AgentVisionIntent) {
+        guard session.isActive else { return }
+        lastForwardedUserText = intent.prompt
+        if !isForwardingMode {
+            session.prepareForVisionInjection()
+        }
+        Task {
+            switch intent.kind {
+            case .scene:
+                await runVoiceScene(request: intent.prompt)
+            case .text:
+                await runVoiceOCR(request: intent.prompt)
+            }
+        }
+    }
+
     // MARK: - 镜腿触发
 
     private func handleDeviceTrigger(_ trigger: AgentDeviceTrigger) {
@@ -2044,9 +2377,7 @@ struct QwenVoiceView: View {
                 showTriggerBanner("agent.trigger.resumed".localized)
             }
         case .endTurn:
-            cancelBrainReply()
-            session.endSession()
-            showIdleMenu()
+            endVoiceSession()
             if streamViewModel.consumeUnexpectedDeviceEndFlag() {
                 let error = AgentTurnErrorClassifier.deviceDisconnected()
                 let hint = error.recoveryKey.map { $0.localized } ?? ""
@@ -2116,7 +2447,8 @@ struct QwenVoiceView: View {
     private func runShortcut(_ shortcut: AgentShortcut) {
         let prompt = shortcut.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
-        if AgentBrainRouter.isForwarding(to: brain) {
+        if isForwardingMode {
+            session.appendUserText(prompt, label: "agent.shortcuts.sent".localized)
             lastForwardedUserText = prompt
             forwardToBrain(prompt)
         } else {
@@ -2364,7 +2696,10 @@ struct QwenVoiceView: View {
             )
             return
         }
-        forwardToBrain(session.followUpMessage("agent.menu.followup.prompt".localized))
+        let prompt = "agent.menu.followup.prompt".localized
+        session.appendUserText(prompt)
+        lastForwardedUserText = prompt
+        forwardToBrain(session.followUpMessage(prompt))
         showTriggerBanner("agent.menu.followup.done".localized)
     }
 
@@ -2652,21 +2987,21 @@ struct QwenVoiceView: View {
 
     /// 应用大脑模式：调整网关输出、接管 OpenClaw 事件，必要时重启会话
     private func applyBrain(_ newBrain: AgentBrain) {
-        let forwarding = AgentBrainRouter.isForwarding(to: newBrain)
-        session.outputEnabled = !forwarding
-        if newBrain == .openclaw || newBrain == .auto {
+        activeForwardingBrain = AgentVoiceBrainPolicy.forwardingTarget(
+            selection: newBrain,
+            availability: .current
+        )
+        session.outputEnabled = activeForwardingBrain == nil
+        if activeForwardingBrain == .openclaw {
             openClawService.onChatEvent = { [self] snapshot in
                 handleOpenClawChatEvent(snapshot)
             }
         } else {
             openClawService.onChatEvent = nil
         }
-        if newBrain != .openclaw, newBrain != .auto {
-            AgentBrainRouter.shared.cancel(to: newBrain)
-        }
         guard session.isActive else { return }
         session.restart()
-        if forwarding {
+        if activeForwardingBrain != nil {
             turnMachine.turnStarted()
             AgentDisplayHub.shared.show(.listening)
         }
@@ -2677,7 +3012,7 @@ struct QwenVoiceView: View {
     private func sendInitialInstruction(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        if AgentBrainRouter.isForwarding(to: brain) {
+        if isForwardingMode {
             lastForwardedUserText = trimmed
             session.appendUserText(
                 trimmed,
@@ -2707,11 +3042,17 @@ struct QwenVoiceView: View {
     }
 
     /// 转发用户文本给大脑（Hermes 流式 / OpenClaw 快照由事件回调驱动）。
-    /// Auto 模式下按意图路由到具体大脑；target 可用于显式指定（如视野上下文）。
+    /// Backend ownership is fixed when the realtime session starts; target is
+    /// reserved for an explicit one-off override.
     private func forwardToBrain(_ text: String, target: AgentBrain? = nil) {
-        let destination = target ?? AgentBrainRouter.resolvedBrain(text, selection: brain)
-        guard destination != .qwen else { return }
-        brainLiveText = ""
+        guard let destination = target ?? activeForwardingBrain,
+              destination.isConcreteBackend,
+              AgentBackendAvailability.current.isReady(destination) else {
+            recoverWithNativeQwen(text)
+            return
+        }
+        brainTextBuffer.start()
+        brainSpeechBuffer.start(enabled: AgentVoiceSettings.replyEnabled)
         hermesTool = nil
         if destination != .openclaw {
             enterThinking()
@@ -2730,13 +3071,14 @@ struct QwenVoiceView: View {
             to: destination,
             image: attachVision ? session.latestVisionFrame : nil,
             onDelta: { [self] delta in
-                brainLiveText += delta
+                handleBrainDelta(delta)
             },
             onFinal: { [self] fullText in
                 finishBrainReply(fullText)
             },
             onError: { [self] message in
-                brainLiveText = ""
+                brainTextBuffer.reset()
+                brainSpeechBuffer.cancel()
                 hermesTool = nil
                 if session.runningTaskCount == 0 {
                     AgentDisplayHub.shared.clearTaskProgress()
@@ -2766,6 +3108,32 @@ struct QwenVoiceView: View {
                 }
             }
         )
+    }
+
+    /// A backend can disappear between ASR finalization and dispatch. Preserve
+    /// the turn by reconnecting with Qwen output and replaying the recorded text.
+    private func recoverWithNativeQwen(_ text: String) {
+        activeForwardingBrain = nil
+        session.outputEnabled = true
+        session.restart()
+        turnMachine.thinkingStarted()
+        AgentDisplayHub.shared.show(.thinking)
+
+        let activeSession = session
+        Task { @MainActor in
+            for _ in 0..<40 {
+                guard activeSession.isActive, activeSession.outputEnabled else { return }
+                if activeSession.connectionState.isOnline { break }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            guard activeSession.isActive,
+                  activeSession.outputEnabled,
+                  activeSession.connectionState.isOnline else {
+                showTriggerBanner("agent.gateway.error.backend.unavailable".localized)
+                return
+            }
+            activeSession.sendTextWithoutTranscript(text)
+        }
     }
 
     /// 处理任务语音指令（进度播报 / 请求取消）。
@@ -2861,7 +3229,7 @@ struct QwenVoiceView: View {
         AgentTaskLensPresenter.handleProgressCheckInChange(
             text: notice.text,
             runningTaskCount: session.runningTaskCount,
-            announceByApp: AgentBrainRouter.isForwarding(to: brain),
+            announceByApp: isForwardingMode,
             isSpeaking: session.isSpeaking,
             isInputActive: session.isInputActive,
             ttsSpeaking: TTSService.shared.isSpeaking
@@ -3095,9 +3463,9 @@ struct QwenVoiceView: View {
         }
     }
 
-    /// 眼镜断连后重新可用：提示「单击恢复交互」，会话已结束时在镜片给出恢复入口
+    /// 眼镜断连后重新可用：提示「单击开始会话」，会话已结束时在镜片给出入口
     private func handleDeviceReconnected() {
-        AgentTriggerFeedback.play(for: .tapResume)
+        AgentTriggerFeedback.play(for: .tapStartSession)
         showTriggerBanner("agent.trigger.reconnected".localized)
         guard !session.isActive || turnMachine.phase == .idle else { return }
         AgentDisplayHub.shared.showMenu(
@@ -3121,7 +3489,7 @@ struct QwenVoiceView: View {
     /// 大脑回复完成：写入转写、播报、回到聆听
     private func finishBrainReply(_ fullText: String) {
         cancelThinkingHint()
-        brainLiveText = ""
+        brainTextBuffer.reset()
         hermesTool = nil
         if session.runningTaskCount == 0 {
             AgentDisplayHub.shared.clearTaskProgress()
@@ -3131,19 +3499,24 @@ struct QwenVoiceView: View {
             session.appendAssistantText(trimmed)
             // 打断期间到达的迟到回复：只入历史不播报（Repeat 菜单可重听）
             guard turnMachine.phase != .interrupted else {
+                brainSpeechBuffer.cancel()
                 droppedReplyWhileInterrupted = true
                 return
             }
+            let usesStreamingSpeech = brainSpeechBuffer.finish(finalText: trimmed)
             turnMachine.outputStarted()
             AgentDisplayHub.shared.show(.speaking)
             if AgentVoiceSettings.replyEnabled {
-                TTSService.shared.speak(trimmed)
+                if !usesStreamingSpeech {
+                    TTSService.shared.speak(AgentSpokenTextFormatter.phrase(trimmed))
+                }
                 // 播报结束（isSpeaking=false）时由 onChange 回到聆听
             } else {
                 turnMachine.outputEnded()
                 restoreIdleDisplay()
             }
         } else {
+            brainSpeechBuffer.cancel()
             guard turnMachine.phase != .interrupted else { return }
             turnMachine.outputEnded()
             restoreIdleDisplay()
@@ -3173,7 +3546,7 @@ struct QwenVoiceView: View {
     private func presentApproval(_ pending: QwenPermissionRequest) {
         turnMachine.permissionRequested()
         // 审批到达语音提示（大脑转发模式网关不播报输出，用 TTS 提醒用户看镜片）
-        if AgentBrainRouter.isForwarding(to: brain),
+        if isForwardingMode,
            AgentVoiceSettings.replyEnabled,
            AgentVoiceSettings.approvalPromptEnabled,
            AgentQuietAnnouncementPolicy.shouldSpeakProactive(),
@@ -3226,16 +3599,31 @@ struct QwenVoiceView: View {
         if parsed.isFinal {
             finishBrainReply(parsed.text)
         } else {
-            if brainLiveText.isEmpty {
+            let isFirstSnapshot = brainTextBuffer.rawText.isEmpty
+            let delta = brainTextBuffer.appendSnapshot(parsed.text)
+            if isFirstSnapshot {
                 enterThinking()
             }
-            brainLiveText += parsed.text
+            handleBrainSpeechDelta(delta)
+        }
+    }
+
+    private func handleBrainDelta(_ delta: String) {
+        brainTextBuffer.append(delta)
+        handleBrainSpeechDelta(delta)
+    }
+
+    private func handleBrainSpeechDelta(_ delta: String) {
+        if brainSpeechBuffer.append(delta) {
+            cancelThinkingHint()
+            turnMachine.outputStarted()
+            AgentDisplayHub.shared.show(.speaking)
         }
     }
 
     /// 进入思考阶段：眼镜显示 thinking，8 秒无回复时语音/横幅提示"还在处理"
     private func enterThinking() {
-        turnMachine.outputStarted()
+        turnMachine.thinkingStarted()
         // 任务/工具进行中：优先展示任务进度，避免 Thinking 与进度显示来回切换
         if session.runningTaskCount > 0, let message = session.taskMessage, !message.isEmpty {
             AgentDisplayHub.shared.showTaskProgress(
@@ -3288,12 +3676,12 @@ struct QwenVoiceView: View {
     /// 取消进行中的大脑回复（打断/结束时调用）
     private func cancelBrainReply() {
         cancelThinkingHint()
-        brainLiveText = ""
+        brainTextBuffer.reset()
+        brainSpeechBuffer.cancel()
         hermesTool = nil
         if session.runningTaskCount == 0 {
             AgentDisplayHub.shared.clearTaskProgress()
         }
-        TTSService.shared.stop()
         AgentBrainRouter.shared.cancel(to: brain)
     }
 

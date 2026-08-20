@@ -77,6 +77,7 @@ struct AgentChatView: View {
 
     /// 回退选图后要执行的端侧视觉动作
     private enum FallbackVisionAction {
+        case sendPhoto
         case ocr
         case scene
     }
@@ -250,9 +251,13 @@ struct AgentChatView: View {
                             Task { await snapAndSend() }
                         } label: {
                             VStack(spacing: 4) {
-                                Image(systemName: "camera.fill")
+                                Image(systemName: runtimeCapabilities.preferredVisualInput == .glassesCamera
+                                    ? "camera.fill"
+                                    : "photo.on.rectangle")
                                     .font(.system(size: 22))
-                                Text("openclaw.chat.snap".localized)
+                                Text(runtimeCapabilities.preferredVisualInput == .glassesCamera
+                                    ? "openclaw.chat.snap".localized
+                                    : "agent.vision.photo.button".localized)
                                     .font(.system(size: 10))
                             }
                             .foregroundColor(isSending ? .gray : .purple)
@@ -260,8 +265,7 @@ struct AgentChatView: View {
                         }
                         .disabled(
                             isSending ||
-                            !connectionState.isOnline ||
-                            !streamViewModel.cameraCaptureState.isStreaming
+                            !connectionState.isOnline
                         )
 
                         // On-device OCR (offline)
@@ -279,9 +283,7 @@ struct AgentChatView: View {
                         }
                         .disabled(
                             isOCRing ||
-                            isSending ||
-                            !connectionState.isOnline ||
-                            !streamViewModel.cameraCaptureState.isStreaming
+                            isSending
                         )
 
                         // Big mic / stop button
@@ -615,12 +617,16 @@ struct AgentChatView: View {
                     fallbackPhotoItem = nil
                     return
                 }
-                isOCRing = true
-                defer { isOCRing = false }
                 switch fallbackAction {
+                case .sendPhoto:
+                    sendGalleryPhoto(image)
                 case .ocr:
+                    isOCRing = true
+                    defer { isOCRing = false }
                     await processOCR(image)
                 case .scene:
+                    isOCRing = true
+                    defer { isOCRing = false }
                     await processScene(image)
                 }
                 fallbackPhotoItem = nil
@@ -681,6 +687,10 @@ struct AgentChatView: View {
     }
 
     // MARK: - Computed
+
+    private var runtimeCapabilities: AssistantRuntimeCapabilities {
+        AssistantRuntimePolicy.resolve(hasActiveGlasses: streamViewModel.hasActiveDevice)
+    }
 
     private var connectionState: AgentConnectionState {
         if let customConfig {
@@ -1133,10 +1143,14 @@ struct AgentChatView: View {
             ))
             return
         }
+        guard runtimeCapabilities.preferredVisualInput == .glassesCamera else {
+            presentFallbackPicker(for: .sendPhoto)
+            return
+        }
         isSending = true
         guard let frame = await captureCurrentFrame() else {
             isSending = false
-            messages.append(AgentChatMessage(role: "assistant", text: "openclaw.chat.noframe".localized, image: nil))
+            presentFallbackPicker(for: .sendPhoto)
             return
         }
         // 捕获期占用结束，由 send() 接管发送期状态（同步交接，无并发窗口）
@@ -1190,6 +1204,10 @@ struct AgentChatView: View {
             showTriggerBanner("agent.vision.revoked".localized)
             return
         }
+        guard runtimeCapabilities.preferredVisualInput == .glassesCamera else {
+            presentFallbackPicker(for: .scene)
+            return
+        }
         isOCRing = true
         defer { isOCRing = false }
 
@@ -1235,6 +1253,10 @@ struct AgentChatView: View {
         guard !isOCRing, !isSending else { return }
         guard !AgentRevokeStore.isRevoked(AgentToolRegistry.visionCapture.id) else {
             showTriggerBanner("agent.vision.revoked".localized)
+            return
+        }
+        guard runtimeCapabilities.preferredVisualInput == .glassesCamera else {
+            presentFallbackPicker(for: .ocr)
             return
         }
         isOCRing = true

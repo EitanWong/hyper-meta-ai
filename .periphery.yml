@@ -1,0 +1,41 @@
+# Periphery configuration — unused-code detection.
+#
+# Read the output as a list of candidates, not a list of deletions. Several
+# things in this project are entered by the system rather than by our own code
+# and therefore look unreachable to static analysis:
+#
+#   * App Intents / App Shortcuts (Siri, Action button, Shortcuts app)
+#   * Live Activity and widget entry points
+#   * URL-scheme handlers (hypermetaai://)
+#   * Share and Controls app extensions
+#   * SwiftUI previews
+#
+# `retain_public` is off deliberately: this is an app, not a library, so public
+# symbols with no in-project caller are genuinely worth questioning.
+
+project: HyperMetaAI.xcodeproj
+
+schemes:
+  - HyperMetaAI
+
+targets:
+  - HyperMetaAI
+  - HyperMetaAIControls
+  - HyperMetaAIShare
+
+# Protocol conformances required by frameworks (AppIntent, Widget, UIApplicationDelegate)
+# would otherwise be reported for every conforming type.
+retain_objc_accessible: true
+retain_swift_ui_previews: true
+retain_assign_only_properties: false
+retain_public: false
+
+# An unused parameter in a delegate method we do not control is not actionable.
+disable_redundant_public_analysis: false
+
+report_exclude:
+  - "**/Generated/**"
+
+strict: false
+quiet: false
+disable_update_check: true

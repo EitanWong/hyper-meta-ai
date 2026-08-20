@@ -31,7 +31,7 @@ enum AgentDisplayStatusMapping {
         case .listening: return "Listening"
         case .thinking: return "Thinking"
         case .speaking: return "Speaking"
-        case .interrupted: return "Paused"
+        case .interrupted: return "Interrupted"
         case .approval: return "Approve?"
         }
     }

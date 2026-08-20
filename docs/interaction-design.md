@@ -1,8 +1,9 @@
 # 眼镜 × Agent 人机交互设计（HCI 方案）
 
 > 依据：Meta Wearables DAT iOS SDK v0.9 官方文档、`facebook/meta-wearables-dat-ios` 社区反馈、
-> `QwenAudio/qwen-audio-agent` 的 "Agent Presence" 设计理念、本仓库现有交互实现。
-> 更新：2026-08-12（对齐 qwen-audio-agent v1.8.2 / v1.8.3）
+> `QwenAudio/qwen-audio-agent` 的 "Agent Presence" 设计理念、OpenAI GPT-Live 工程实践、
+> 本仓库现有交互实现。
+> 更新：2026-08-16（对齐 qwen-audio-agent v1.10.1，并参考 GPT-Live）
 
 ## 1. 硬件触发事件盘点（官方 DAT 能拿到什么）
 
@@ -10,21 +11,22 @@
 
 | 通道 | 事件 | 说明 |
 | --- | --- | --- |
-| 镜腿触摸 | 单击 → 会话 `PAUSED` | 流暂停（相机/音频停止下发） |
-| 镜腿触摸 | 再单击 → 会话 `STARTED` | 流恢复 |
-| 镜腿触摸 | 长按 → 会话 `STOPPED` | 会话终止，需 App 内重新发起 |
-| 佩戴/折合 | 摘镜、合折 → `STOPPED` | 蓝牙断开；官方不暴露 hinge 位置，摘下即结束会话 |
-| 麦克风 | HFP 全双工语音流 | 唯一的高带宽自然输入，主交互通道 |
+| 镜腿触摸 | 单击 | DAT 只提供会话状态变化，不提供原始触控事件；App 空闲时开始 Session，下一次触控结束 Session，不显示暂停 |
+| 镜腿触摸 | 再次单击 | DAT 状态变化由 App 会话状态机解释；结束当前 Session，状态同步到手机与镜片 |
+| 镜腿触摸 | 长按 | DAT 会话进入 `STOPPED`；结束 Session，设备自行停止时进入断连恢复提示 |
+| 佩戴/折合 | 摘镜、合折 → DAT 会话 `STOPPED` | 眼镜能力停止；手机实时语音会话继续，官方不暴露 hinge 位置 |
+| 眼镜麦克风 | HFP 全双工语音流 | 连接后成为首选外部音频路由，但不决定会话能否启动 |
+| 手机麦克风 | iOS 内置全双工音频路由 | 无眼镜时的核心语音输入，保持同一实时会话与打断语义 |
 | 摄像头 | 视频帧（2/7/15/24/30fps，低/中/高清）+ SDK 拍照 `capturePhoto` | 视野注入 / 视觉 Agent |
 | 镜片（MRBD） | Display 组件 `onTap` 回调 | 按钮/菜单/审批卡的精确选择，600×600 单屏 |
 | 传感器 | IMU（加速度计/陀螺仪/指南针） | 佩戴姿态、点头/摇头等空间意图（需权限） |
 | 设备 | 连接状态（connected/disconnected）、`devicesStream` | 会话前提与恢复时机 |
-| 手机 | App 内 UI | 兜底输入与复杂配置 |
+| 手机 | App 内 UI + 系统选图 | 独立运行时、视觉输入、复杂配置与历史管理 |
 
 ### 1.2 拿不到（明确边界）
 
 - **原始 captouch 手势事件**：官方无手势 API。双击、滑动（切歌/音量）、滑动方向均不可见。
-- **状态转换原因**：官方明确 `DeviceSessionState` 不暴露 transition reason——无法区分「单击暂停」与「摘镜暂停」、无法区分「长按结束」与「系统手势/其他 App 抢占」。
+- **状态转换原因**：官方明确 `DeviceSessionState` 不暴露 transition reason——无法区分触控、摘镜或系统接管造成的状态变化，也无法区分「长按结束」与其他停止原因。
 - **相机物理按键**：拍照/录像按钮是固件级隐私手势，只以 StreamState 变化间接可见；App 只能自行调用 `capturePhoto`。
 - **眼镜 LED / 眼镜触觉**：固件管理（社区 feature request 已提交 Meta）。
 - **后台语音唤醒（"Hey Meta"）与通知事务**：Transactions 尚未对第三方开放（Meta 表示未来支持），会话只能由 App 发起。
@@ -38,12 +40,13 @@
 
 ## 2. 现有 App 交互模型（已实现）
 
+- 手机拥有核心运行时：`QwenVoiceSession`、音频上传/播放、barge-in、Agent 委派、转写与持久化均不依赖 DAT 会话；眼镜仅通过可选适配器增加 HFP 路由、视野、镜片和镜腿控制。
+- `AssistantRuntimePolicy` 统一解析 `phoneStandalone` / `glassesEnhanced`：两种模式共享同一语音会话，视觉输入分别优先使用系统选图 / 眼镜相机；眼镜取帧失败仍降级选图。
 - 统一回合状态机（`AgentTurnStateMachine`）：
   `idle →(单击) listening → thinking → speaking → listening`；
-  `speaking →(单击) interrupted`（打断静音）；`interrupted →(单击) resume`；
-  任意态 `→(长按) idle`（结束回合）。
+  任意非 `idle` 态 `→(再次单击/长按) idle`（结束回合）。App 不将硬件状态显示为暂停。
 - 镜片输出分层（`AgentDisplayHub`，MWDATDisplay FlexBox + Button onTap）：
-  - L0 状态图标（Listening / Thinking / Speaking / Paused / Approve?）
+  - L0 状态图标（Listening / Thinking / Speaking / Interrupted / Approve?）
   - L1 回合结束菜单（Talk / Repeat / Audit / Shortcuts / OCR / Translate / Vision / New chat / Close，有后台任务时插入 Task）
   - L2 审批卡（Allow / Deny / Later + 60s 超时跳过）
   - L3 结果/进度卡（任务进度、完成/失败摘要、工具执行结果）
@@ -59,13 +62,28 @@
 
 ## 3. 设计原则
 
-1. **Voice-first，tap 是通用「注意」手势**：语音是主输入，单击是唯一可靠的模态控制（打断/恢复/唤醒）。
+1. **Voice-first，tap 是通用会话开关**：语音是主输入，单击开始会话，再次单击结束会话。
 2. **状态始终可见**：镜片状态图标 + TTS 播报双通道，避免「眼镜在干嘛」的盲区。
-3. **打断必可恢复**：barge-in / 单击打断 / 菜单 Repeat 重听，迟到结果只入历史不丢失。
+3. **输出可控**：语音 barge-in / 菜单 Repeat 重听，迟到结果只入历史不丢失；眼镜触控只负责开始/结束会话。
 4. **任务不阻塞对话（Agent Presence）**：后台任务持续执行，完成时自然回归当前对话（qwen-audio-agent 的 "It's ready." 模式）。
-5. **敏感操作必确认**：审批卡 + 防误触（approval 态单击不响应）。
+5. **敏感操作必确认**：审批卡负责 Allow / Deny / Later；镜腿触控不代替审批，只结束当前 Session。
 6. **输出克制**：镜片单屏 ≤ 600×600、不滚动、20s 息屏；音频播报短句优先。
-7. **边界明确**：会话由 App 发起；摘镜/合折即停；恢复需用户显式操作（隐私兜底）。
+7. **边界明确**：核心语音会话由 App 发起并由手机持有；摘镜/合折只停止 DAT 眼镜能力，恢复眼镜能力需用户显式操作（隐私兜底）。
+
+### 3.1 GPT-Live 架构对照
+
+参考 [OpenAI GPT-Live 工程文章](https://openai.com/index/continuous-voice-interaction-with-gpt-live/)，
+App 按以下边界持续演进：
+
+| GPT-Live 原则 | App 对应实现 | 下一约束 |
+| --- | --- | --- |
+| 全双工媒体快路径 | 采集、播放、能量检测和 barge-in 独立于工具与业务 RPC；Qwen 播报期间的本地检测直接消费原始采集帧，不等待 PCM 编码或 WebSocket send completion | 音频线程只做有界计算，不执行网络、JSON 或 MainActor 业务逻辑 |
+| 异步委派推理 | `spawn_thinking` 工作队列立即回执，后台 Agent 继续执行；实时模型保持当前对话和公告窗口 | 继续降低预热与首个后台 token 延迟，并保持 owner FIFO / 单在飞约束 |
+| 状态化切换 | response / generation / capture token 隔离迟到音频、完成事件和打断信号；重连保留前台会话并清空失效播放 | provider 支持并行实例时，再加入预填充替换实例与原子 cutover；当前不伪装成模型级 handoff |
+| WARP / Instant Connect | 当前 Qwen 链路使用 DashScope WebSocket，通过播放预热、连接复用和首包快路径吸收“减少启动往返”的原则 | WARP 依赖 WebRTC、DTLS 1.3、ICE 与预协商 SCTP；provider 未开放对应协议前不宣称 WARP 兼容 |
+| 推测态与权威态分离 | partial transcript 仅驱动即时界面，final / response lifecycle 才提交权威回合；取消代次拒绝迟到结果 | 继续对每个 speculative event 绑定响应代次和可观测时间戳 |
+| 生产可观测性 | capture→detect、receive→schedule、send timeout、陈旧帧丢弃与重连状态均有回归门禁 | 补齐真实地域、长会话和弱网分位数，不以模拟器平均值替代 p95 / p99 |
+| 可选硬件适配器 | 手机音频路由与实时会话构成稳定核心；DAT 设备发现、相机、镜片和物理控制在独立异步路径接入 | 任何眼镜初始化、重连或取帧失败都不得阻塞核心语音快路径 |
 
 ## 4. 统一交互方案
 
@@ -74,9 +92,7 @@
 | 物理输入 | 上下文 | 语义 |
 | --- | --- | --- |
 | 单击 | idle | 唤醒新回合 |
-| 单击 | speaking | 打断输出（静音） |
-| 单击 | interrupted | 恢复聆听 |
-| 单击 | approval | 忽略（防误触） |
+| 单击 | 任意非 idle 回合状态 | 结束当前 Session |
 | 单击 | 镜片菜单/审批卡 | 选中当前项（onTap 组件） |
 | 长按 | 任意 | 结束回合 → 显示 L1 菜单 |
 | 说话 | 全双工 | 主输入（barge-in 打断播报） |
@@ -114,7 +130,7 @@
 - **每日晨报（已实现）**：设置页开启后每天定时送达本地通知（时间 / 栏目可配置）——「早上好，%@！今天是 X月X日 星期X。日程：… 提醒：… 任务：…」，融合 EventKit 今日日程、待触发提醒与进行中任务；空态回退「今天没有日程、提醒和任务，祝你有美好的一天！」；内容在冷启动 / 回前台 / 设置变更时即时重算，进后台提交 BGAppRefreshTask 机会式刷新（`AgentBriefingScheduler` 幂等调度、`AgentBriefingBuilder` 纯逻辑可测）。
 - **语音休眠与唤醒词（已实现，qwen-audio-agent v1.8 对齐）**：语音页新增「休眠」入口与「语音唤醒词」开关——休眠后 App 原生监听 iPhone 麦克风（Speech framework 中文识别，对应桌面版网关侧 sherpa-onnx 监听），说「你好千问」自动向网关发 `wake` 并恢复聆听（镜腿单击 / 一键「唤醒」同样可唤醒）；网关协议同步升级：`connect` 携带会话级 `provider` 与 `wakeWordOnly`、客户端 `sleep`/`wake` 事件、服务端 `client.state`（sleeping）处理；实时语音模型档案升级到 qwen-audio-agent v1.8.3（默认 `qwen-audio-3.0-realtime-plus`，Audio 纯语音低延迟 / Omni 多模态可分组选择），直连 DashScope 的 Omni 实时会话默认 `qwen3.5-omni-flash-realtime`。
 - **健康数据管家（已实现）**：语音 / 聊天双入口直接读写系统健康数据（HealthKit）——「记录体重65公斤 / 今天走了8000步 / 记录跑步5公里」写入（数字解析支持 ASCII 数字与「65点5」中文小数），「今天 / 昨天走了多少步」「我体重多少」「昨晚睡了多久」查询（昨晚窗口 = 昨天 22:00 → 今天 10:00）；权限按需请求，`AgentHealthExecutor` 统一授权 + HKHealthStore 副作用（provider 可注入 Mock），解析 / 格式化纯逻辑可测。
-- **佩戴感知辅助**：会话因摘镜 STOPPED 后，戴上眼镜且 App 在前台时提示「单击恢复上一会话」，避免每次手动点开。
+- **佩戴感知辅助**：会话因摘镜 STOPPED 后，戴上眼镜且 App 在前台时提示「单击开始会话」，避免每次手动点开。
 - **镜片快捷指令（已实现）**：设置页配置常用指令（最多 8 条），语音页 / 聊天页 L1 菜单「Shortcuts」子菜单一键触发（大脑模式转发 / 原生模式直接发送）。
 - **权限分级（已实现）**：设置页选择审批策略——始终询问（默认）/ 单次放行 / 会话内放行 / 始终放行（受撤销策略约束）/ 全部拒绝；自动处理写审计，网关失败回退弹卡。
 
@@ -157,7 +173,7 @@
 
 | 通道 | 可用触发 | 语义 | 状态 |
 | --- | --- | --- | --- |
-| 眼镜单击 | 会话内 | 唤醒 / 暂停 / 恢复 / 打断 | 已实现 |
+| 眼镜单击 | 任意 | idle 时开始 Session；非 idle 时结束 Session | 已实现 |
 | 眼镜长按 | 会话内 | 结束回合 → 镜片菜单 | 已实现 |
 | 眼镜说话 | HFP 全双工 | 主输入（barge-in） | 已实现 |
 | Siri 短语 | 系统 | 「跟 Hyper 说话」→ 启动语音会话 | 已实现（AppShortcut） |
@@ -191,9 +207,9 @@
 
 ### 6.3 与眼镜会话的衔接
 
-- Siri 唤起 → App 打开 → 眼镜已连接：直接进语音页并恢复上次会话（与「佩戴恢复提示」同语义：单击即可继续）；未连接：进 Hub 等待连接 / 选择 Agent。
-- 启动后所有回合语义与眼镜 tap 完全一致（单击打断 / 恢复、长按结束），Siri 只是「另一种启动方式」。
-- 输出克制：Siri 侧只做启动确认与状态播报，内容输出仍走眼镜 TTS + 镜片，避免双通道抢话。
+- Siri 唤起 → App 打开 → 直接进入同一语音页；眼镜已连接时启用镜腿、镜片与眼镜视野，未连接时立即使用手机麦克风、扬声器和系统选图，不等待硬件。
+- 启动后所有回合语义与眼镜 tap 完全一致（单击开始、再次单击/长按结束），Siri 只是「另一种启动方式」。
+- 输出克制：Siri 侧只做启动确认与状态播报；内容输出走当前音频路由，有眼镜时再同步镜片，避免双通道抢话。
 
 ## 7. 完整 HCI 方案（人机分工 × 交互规范）
 
@@ -204,17 +220,15 @@
 ```mermaid
 stateDiagram-v2
   [*] --> idle
-  idle --> listening : 单击唤醒 / Siri / 佩戴恢复
+  idle --> listening : 单击开始 / Siri
   listening --> thinking : 用户说完（VAD 断句）
   thinking --> speaking : Agent 开始输出
   speaking --> listening : 输出结束（自然轮转）
-  speaking --> interrupted : 单击打断（静音）
-  listening --> interrupted : 单击静音
-  interrupted --> listening : 再单击恢复
+  speaking --> idle : 再次单击结束
+  listening --> idle : 再次单击结束
   thinking --> approval : 敏感工具请求权限
   approval --> thinking : Allow / Deny / Later
-  interrupted --> interrupted : 迟到输出只入历史
-  approval --> approval : 单击忽略（防误触）
+  approval --> idle : 单击结束会话
   note right of any
     任意非 idle 态 → 长按 → idle，显示 L1 菜单
   end note
@@ -227,7 +241,7 @@ stateDiagram-v2
 | 眼镜 | 语音输入/输出、视野注入、单击/长按、镜片菜单 | 复杂配置、长文本浏览、后台唤醒（会话须 App 发起） |
 | App 本地 | 回合状态机、本地指令拦截（进度/重听/清单/提醒/记忆）、审批与审计、TTS、端侧 OCR/翻译/场景识别、通知呈现 | 需要外部知识/计算的深度任务 |
 | Agent（Qwen / Hermes / OpenClaw / 自定义） | 理解与生成、工具调用、后台任务 | 直接触碰敏感设备能力（须经审批链） |
-| 手机 | 兜底 UI、设置、历史、任务列表、审计、系统级入口（Siri / Control Center / Action Button） | 打断眼镜侧低延迟交互 |
+| 手机 | 核心实时语音运行时、系统选图、设置、历史、任务列表、审计、系统级入口（Siri / Control Center / Action Button） | 在音频回调内执行工具、持久化或其他阻塞业务逻辑 |
 
 ### 7.3 输出话术规范（怎么说）
 
@@ -260,7 +274,7 @@ stateDiagram-v2
 | 网关不可达 | 错误播报 + 镜片状态 | 自动重连并透出进度；提示检查电脑端服务 |
 | 语音不可用 | 「语音不可用」提示 | 检查权限/硬件；转聊天兜底 |
 | 静默超时 | 思考超时提示（默认 8s） | 菜单重听 / 重新说 |
-| 眼镜断开 | 手机触觉 + 摘镜提示 | 重连后「单击恢复上一会话」 |
+| 眼镜断开 | 手机触觉 + 摘镜提示 | 重连后「单击开始会话」 |
 | 未知错误 | 通用错误 + 审计留痕 | 重试动作；历史保留可查 |
 
 排障辅助（已实现）：设置页「诊断报告」一键生成 App / 系统 / Agent 设置 / 连接 / 工具权限 / 审计 / 提醒的文本报告（可复制、可系统分享）；API Key / Token 一律掩码，适合贴给开发者排查「连不上 / 没声音 / 权限不对」类问题。

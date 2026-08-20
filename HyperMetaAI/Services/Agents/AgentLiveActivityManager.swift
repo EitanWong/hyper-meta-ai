@@ -151,7 +151,9 @@ enum AgentVoiceLiveActivityStatus {
             return .sleeping
         }
         switch connectionState {
-        case .disconnected, .connecting:
+        case .sleeping:
+            return .sleeping
+        case .disconnected, .connecting, .waking:
             return .connecting
         case .failed:
             return .failed

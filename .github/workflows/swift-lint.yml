@@ -1,0 +1,66 @@
+name: Swift Linting and Formatting
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-lint-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fails on SwiftLint `error` severity only. Warnings are reported inline and
+  # left non-blocking on purpose: the codebase predates this config, and a gate
+  # that fails on day one gets bypassed rather than fixed. Tighten by promoting
+  # individual rules to `error` in .swiftlint.yml as the backlog comes down.
+  swiftlint:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install SwiftLint
+        run: brew install swiftlint
+
+      - name: Run SwiftLint
+        run: swiftlint lint --reporter github-actions-logging
+
+  # Non-blocking: `indent` is disabled in .swiftformat because the project mixes
+  # 2- and 4-space indentation, so a clean run is not yet achievable. Flip this
+  # to a hard gate once indentation is unified in its own commit.
+  swiftformat:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install SwiftFormat
+        run: brew install swiftformat
+
+      - name: Check formatting
+        continue-on-error: true
+        run: swiftformat --lint .
+
+  # Reports only. App Intents, Live Activity widgets, URL-scheme handlers and
+  # app extensions are entered by iOS rather than by our own code, so they can
+  # look unreachable while being load-bearing. Every finding needs a human to
+  # confirm there is no system caller before anything is deleted.
+  periphery:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Periphery
+        run: brew install periphery
+
+      - name: Scan for unused code
+        continue-on-error: true
+        run: ./Scripts/scan-unused-code.sh

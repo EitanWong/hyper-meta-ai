@@ -3,10 +3,8 @@
  * 统一「眼镜物理触发 × Agent 回合」的交互语义，供文字聊天与实时语音共用。
  *
  * 回合（Turn）生命周期：
- *   idle →（单击唤醒）listening → thinking → speaking → listening
- *                     ↘ interrupted（镜腿单击：打断输出并静音）
- *                         → listening（再单击：恢复聆听）
- *   任意非 idle 状态 → idle（镜腿长按：结束回合）
+ *   idle →（单击）listening → thinking → speaking → listening
+ *   任意非 idle 状态 → idle（再次单击或长按：结束回合）
  *
  * 状态机只描述“应该做什么”，不持有硬件/网络副作用，便于单元测试。
  */
@@ -23,9 +21,9 @@ enum AgentTurnPhase: Equatable {
     case thinking
     /// Agent 正在播报/输出
     case speaking
-    /// 被镜腿单击打断：输出停止、输入静音
+    /// 内部输出中断保护态：迟到输出只入历史，不改变当前会话开关
     case interrupted
-    /// 后台任务请求权限：等待用户在手机端确认（镜腿单击不响应，避免误操作）
+    /// 后台任务请求权限：等待用户在手机端确认；镜腿触控仍可结束当前 Session。
     case approval
 }
 
@@ -50,10 +48,8 @@ struct AgentTurnStateMachine {
     /// 消费一个眼镜物理触发事件
     mutating func handle(trigger: AgentDeviceTrigger) -> AgentTurnCommand {
         switch trigger {
-        case .tapPause:
-            return pauseTapped()
-        case .tapResume:
-            return resumeTapped()
+        case .tapStartSession, .tapEndSession:
+            return toggleSession()
         case .longPressStop:
             return longPressTapped()
         }
@@ -70,6 +66,16 @@ struct AgentTurnStateMachine {
             break
         default:
             phase = .speaking
+        }
+    }
+
+    /// The backend accepted the turn but has not produced audible output yet.
+    mutating func thinkingStarted() {
+        switch phase {
+        case .listening, .speaking, .thinking:
+            phase = .thinking
+        case .idle, .interrupted, .approval:
+            break
         }
     }
 
@@ -113,28 +119,13 @@ struct AgentTurnStateMachine {
 
     // MARK: - Triggers
 
-    private mutating func pauseTapped() -> AgentTurnCommand {
-        switch phase {
-        case .idle:
-            // 无回合可打断：单击 = 唤醒新回合
+    private mutating func toggleSession() -> AgentTurnCommand {
+        if phase == .idle {
             phase = .listening
             return .wake
-        case .interrupted:
-            // 已处于打断态，幂等
-            return .none
-        case .approval:
-            // 等待手机端确认，镜腿单击不打断
-            return .none
-        case .listening, .thinking, .speaking:
-            phase = .interrupted
-            return .interrupt
         }
-    }
-
-    private mutating func resumeTapped() -> AgentTurnCommand {
-        guard phase == .interrupted else { return .none }
-        phase = .listening
-        return .resume
+        phase = .idle
+        return .endTurn
     }
 
     private mutating func longPressTapped() -> AgentTurnCommand {

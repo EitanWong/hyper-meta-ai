@@ -3,9 +3,12 @@ import XCTest
 
 @MainActor
 final class AgentBrainTests: XCTestCase {
+  private var savedBrainSelection: String?
 
   override func setUp() {
     super.setUp()
+    savedBrainSelection = UserDefaults.standard.string(forKey: AgentBrainSettings.key)
+    UserDefaults.standard.removeObject(forKey: AgentBrainSettings.key)
     UserDefaults.standard.removeObject(forKey: AgentRoutingSettings.customTaskKeywordsKey)
     UserDefaults.standard.removeObject(forKey: AgentRoutingSettings.customChatKeywordsKey)
     CustomAgentStore.clear()
@@ -13,6 +16,11 @@ final class AgentBrainTests: XCTestCase {
   }
 
   override func tearDown() {
+    if let savedBrainSelection {
+      UserDefaults.standard.set(savedBrainSelection, forKey: AgentBrainSettings.key)
+    } else {
+      UserDefaults.standard.removeObject(forKey: AgentBrainSettings.key)
+    }
     UserDefaults.standard.removeObject(forKey: AgentRoutingSettings.customTaskKeywordsKey)
     UserDefaults.standard.removeObject(forKey: AgentRoutingSettings.customChatKeywordsKey)
     CustomAgentStore.clear()
@@ -20,8 +28,16 @@ final class AgentBrainTests: XCTestCase {
     super.tearDown()
   }
 
-  func testIsForwardingOnlyForNonQwenBrains() {
-    XCTAssertTrue(AgentBrainRouter.isForwarding(to: .auto))
+  func testIsForwardingRequiresAReadyBackendForAuto() {
+    let hermesReady = AgentBackendAvailability(
+      openClawReady: false,
+      hermesReady: true,
+      customReady: false
+    )
+
+    XCTAssertFalse(AgentBrainRouter.isForwarding(to: .auto, availability: .none))
+    XCTAssertTrue(AgentBrainRouter.isForwarding(to: .auto, availability: hermesReady))
+    XCTAssertFalse(AgentBrainRouter.isForwarding(to: .none))
     XCTAssertFalse(AgentBrainRouter.isForwarding(to: .qwen))
     XCTAssertTrue(AgentBrainRouter.isForwarding(to: .hermes))
     XCTAssertTrue(AgentBrainRouter.isForwarding(to: .openclaw))
@@ -54,8 +70,95 @@ final class AgentBrainTests: XCTestCase {
     XCTAssertEqual(AgentBrainSettings.selected, original)
   }
 
+  func testBrainSettingsDefaultToAuto() {
+    XCTAssertEqual(AgentBrainSettings.selected, .auto)
+  }
+
+  func testVoiceAutoAlwaysKeepsNativeQwenOutput() {
+    let allReady = AgentBackendAvailability(
+      openClawReady: true,
+      hermesReady: true,
+      customReady: true
+    )
+
+    XCTAssertNil(AgentVoiceBrainPolicy.forwardingTarget(
+      selection: .auto,
+      availability: allReady
+    ))
+    XCTAssertNil(AgentVoiceBrainPolicy.forwardingTarget(
+      selection: .qwen,
+      availability: allReady
+    ))
+  }
+
+  func testVoiceTranscriptionModeRequiresExplicitReadyBackend() {
+    let hermesReady = AgentBackendAvailability(
+      openClawReady: false,
+      hermesReady: true,
+      customReady: false
+    )
+
+    XCTAssertEqual(AgentVoiceBrainPolicy.forwardingTarget(
+      selection: .hermes,
+      availability: hermesReady
+    ), .hermes)
+    XCTAssertNil(AgentVoiceBrainPolicy.forwardingTarget(
+      selection: .openclaw,
+      availability: hermesReady
+    ))
+  }
+
+  func testPhoneOnlyAutoModeDoesNotStartPersistedOpenClawConnection() {
+    XCTAssertFalse(AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: true,
+      connectionState: .disconnected,
+      hasActiveDevice: false,
+      selectedBrain: .auto
+    ))
+  }
+
+  func testExplicitOpenClawSelectionCanStartWithoutGlasses() {
+    XCTAssertTrue(AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: true,
+      connectionState: .disconnected,
+      hasActiveDevice: false,
+      selectedBrain: .openclaw
+    ))
+  }
+
+  func testActiveGlassesCanStartEnabledOpenClawNode() {
+    XCTAssertTrue(AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: true,
+      connectionState: .disconnected,
+      hasActiveDevice: true,
+      selectedBrain: .auto
+    ))
+  }
+
+  func testOpenClawAutoConnectRequiresEnabledDisconnectedService() {
+    XCTAssertFalse(AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: false,
+      connectionState: .disconnected,
+      hasActiveDevice: true,
+      selectedBrain: .auto
+    ))
+    XCTAssertFalse(AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: true,
+      connectionState: .connecting,
+      hasActiveDevice: true,
+      selectedBrain: .auto
+    ))
+    XCTAssertFalse(AgentBackgroundConnectionPolicy.shouldAutoConnectOpenClaw(
+      isEnabled: true,
+      connectionState: .error("gateway unavailable"),
+      hasActiveDevice: true,
+      selectedBrain: .auto
+    ))
+  }
+
   func testBrainDisplayNames() {
     XCTAssertEqual(AgentBrain.auto.displayName, "Auto")
+    XCTAssertEqual(AgentBrain.none.displayName, "agent.brain.none".localized)
     XCTAssertEqual(AgentBrain.qwen.displayName, "Qwen")
     XCTAssertEqual(AgentBrain.hermes.displayName, "Hermes")
     XCTAssertEqual(AgentBrain.openclaw.displayName, "OpenClaw")
@@ -114,26 +217,179 @@ final class AgentBrainTests: XCTestCase {
     XCTAssertEqual(AgentBrainRouter.route("解释一下什么是区块链"), .hermes)
   }
 
-  func testResolvedBrainAutoRoutesTaskToOpenClaw() {
+  func testWebSearchPolicyDetectsFreshFactsWithoutHijackingTimelessQuestions() {
+    XCTAssertTrue(AgentWebSearchPolicy.requiresWebSearch("今天上海天气怎么样"))
+    XCTAssertTrue(AgentWebSearchPolicy.requiresWebSearch("查一下最新航班状态"))
+    XCTAssertTrue(AgentWebSearchPolicy.requiresWebSearch("latest USD exchange rate"))
+    XCTAssertFalse(AgentWebSearchPolicy.requiresWebSearch("解释天气系统的形成原理"))
+    XCTAssertFalse(AgentWebSearchPolicy.requiresWebSearch("为什么天空是蓝色的"))
+  }
+
+  func testWebSearchPolicyAddsSourceAndFreshnessContractOnlyWhenNeeded() {
+    let query = "搜索今天的人工智能新闻"
+    let prepared = AgentWebSearchPolicy.preparedRequest(query)
+
+    XCTAssertTrue(prepared.contains(query))
+    XCTAssertTrue(prepared.contains("并行检索"))
+    XCTAssertTrue(prepared.contains("官方"))
+    XCTAssertTrue(prepared.contains("检索时间"))
     XCTAssertEqual(
-      AgentBrainRouter.resolvedBrain("帮我查一下快递到哪里了", selection: .auto),
+      AgentWebSearchPolicy.preparedRequest("解释量子纠缠"),
+      "解释量子纠缠"
+    )
+  }
+
+  func testFreshInformationRoutesToToolCapableAgent() {
+    XCTAssertEqual(AgentBrainRouter.route("今天美元汇率是多少"), .openclaw)
+    XCTAssertEqual(AgentBrainRouter.route("最新比赛比分"), .openclaw)
+  }
+
+  func testBrainLiveTextBufferPublishesCoalescedSnapshot() async {
+    let buffer = AgentBrainLiveTextBuffer()
+    buffer.start()
+    buffer.append("你")
+    buffer.append("好")
+    buffer.append("，世界")
+
+    XCTAssertEqual(buffer.text, "", "60ms 发布窗口内不应逐 token 触发 UI")
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    XCTAssertEqual(buffer.text, "你好，世界")
+
+    buffer.reset()
+    XCTAssertEqual(buffer.text, "")
+  }
+
+  func testBrainLiveTextBufferConvertsOpenClawSnapshotsToDeltas() async {
+    let buffer = AgentBrainLiveTextBuffer()
+    buffer.start()
+
+    XCTAssertEqual(buffer.appendSnapshot("正在查询"), "正在查询")
+    XCTAssertEqual(buffer.appendSnapshot("正在查询航班"), "航班")
+    XCTAssertEqual(buffer.appendSnapshot("正在查询航班"), "")
+
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    XCTAssertEqual(buffer.text, "正在查询航班")
+  }
+
+  func testStreamingSpeechStartsAtFirstPhraseAndFlushesTail() {
+    var segments: [String] = []
+    var finishCount = 0
+    let buffer = AgentBrainStreamingSpeechBuffer(
+      enqueueSegment: { segments.append($0) },
+      finishSegments: { finishCount += 1 },
+      stopSpeech: {}
+    )
+    buffer.start(enabled: true)
+
+    XCTAssertFalse(buffer.append("这是第一段"))
+    XCTAssertTrue(buffer.append("。"), "完整短句到达后应立即开始播报")
+    XCTAssertEqual(segments, ["这是第一段。"])
+    XCTAssertFalse(buffer.append("这是结尾"))
+
+    XCTAssertTrue(buffer.finish(finalText: "这是第一段。这是结尾"))
+    XCTAssertEqual(segments, ["这是第一段。", "这是结尾"])
+    XCTAssertEqual(finishCount, 1)
+  }
+
+  func testSpokenTextFormatterKeepsLabelsButDropsURLsAndSources() {
+    XCTAssertEqual(
+      AgentSpokenTextFormatter.phrase("查看[官方公告](https://example.com/a) https://example.com/b"),
+      "查看官方公告"
+    )
+    XCTAssertTrue(AgentSpokenTextFormatter.isSourcesSection("来源：https://example.com"))
+    XCTAssertTrue(AgentSpokenTextFormatter.isSourcesSection("Sources: example.com"))
+    XCTAssertFalse(AgentSpokenTextFormatter.isSourcesSection("结论：航班准点"))
+  }
+
+  func testResolvedBrainAutoRoutesTaskToOpenClaw() {
+    let availability = AgentBackendAvailability(
+      openClawReady: true,
+      hermesReady: true,
+      customReady: true
+    )
+    XCTAssertEqual(
+      AgentBrainRouter.resolvedBrain(
+        "帮我查一下快递到哪里了",
+        selection: .auto,
+        availability: availability
+      ),
       .openclaw
     )
   }
 
   func testResolvedBrainAutoRoutesOtherToHermes() {
+    let availability = AgentBackendAvailability(
+      openClawReady: true,
+      hermesReady: true,
+      customReady: true
+    )
     XCTAssertEqual(
-      AgentBrainRouter.resolvedBrain("为什么天空是蓝色的？", selection: .auto),
+      AgentBrainRouter.resolvedBrain(
+        "为什么天空是蓝色的？",
+        selection: .auto,
+        availability: availability
+      ),
       .hermes
     )
     XCTAssertEqual(
-      AgentBrainRouter.resolvedBrain("你好", selection: .auto),
+      AgentBrainRouter.resolvedBrain("你好", selection: .auto, availability: availability),
       .hermes,
       "Auto 是转发模式：闲聊也走 Hermes（Qwen 原生需手动选择）"
     )
   }
 
+  func testResolvedBrainAutoFallsBackAcrossReadyBackends() {
+    XCTAssertEqual(
+      AgentBrainRouter.resolvedBrain(
+        "帮我查天气",
+        selection: .auto,
+        availability: AgentBackendAvailability(
+          openClawReady: false,
+          hermesReady: true,
+          customReady: false
+        )
+      ),
+      .hermes
+    )
+    XCTAssertEqual(
+      AgentBrainRouter.resolvedBrain(
+        "解释一下量子纠缠",
+        selection: .auto,
+        availability: AgentBackendAvailability(
+          openClawReady: true,
+          hermesReady: false,
+          customReady: false
+        )
+      ),
+      .openclaw
+    )
+    XCTAssertEqual(
+      AgentBrainRouter.resolvedBrain(
+        "介绍一下你自己",
+        selection: .auto,
+        availability: AgentBackendAvailability(
+          openClawReady: false,
+          hermesReady: false,
+          customReady: true
+        )
+      ),
+      .custom
+    )
+  }
+
+  func testResolvedBrainAutoUsesNoBackendWhenNoneAreReady() {
+    XCTAssertEqual(
+      AgentBrainRouter.resolvedBrain("帮我查天气", selection: .auto, availability: .none),
+      .none
+    )
+    XCTAssertEqual(
+      AgentBrainRouter.resolvedBrain("你好", selection: .auto, availability: .none),
+      .none
+    )
+  }
+
   func testResolvedBrainNonAutoReturnsSelection() {
+    XCTAssertEqual(AgentBrainRouter.resolvedBrain("帮我查天气", selection: .none), .none)
     XCTAssertEqual(AgentBrainRouter.resolvedBrain("帮我查天气", selection: .qwen), .qwen)
     XCTAssertEqual(AgentBrainRouter.resolvedBrain("帮我查天气", selection: .hermes), .hermes)
     XCTAssertEqual(AgentBrainRouter.resolvedBrain("你好", selection: .openclaw), .openclaw)
@@ -262,7 +518,7 @@ final class AgentBrainTests: XCTestCase {
   }
 
   func testVoiceHistoryNamingNonCustomBrainsUseQwenNamespace() {
-    for brain in [AgentBrain.qwen, .hermes, .openclaw, .auto] {
+    for brain in [AgentBrain.none, .qwen, .hermes, .openclaw, .auto] {
       let name = AgentVoiceHistoryNaming.agentName(brain: brain, customConfig: nil)
       XCTAssertEqual(name, "qwen-audio-agent")
     }

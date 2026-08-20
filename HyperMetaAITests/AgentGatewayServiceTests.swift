@@ -74,6 +74,18 @@ final class AgentGatewayServiceTests: XCTestCase {
         XCTAssertEqual(errors, [.emptyObjective])
     }
 
+    func testSubmitWorkDoesNotCreateTaskWithoutBackend() {
+        let backend = ScriptedBackend()
+        let service = makeService(backend)
+        var errors: [AgentGatewayError] = []
+        service.onError = { errors.append($0) }
+
+        XCTAssertNil(service.submitWork(objective: "整理报告", brain: .none))
+        XCTAssertEqual(errors, [.backendUnavailable])
+        XCTAssertTrue(service.works.isEmpty)
+        XCTAssertTrue(backend.prompts.isEmpty)
+    }
+
     func testWorksRunFIFOWithinOwner() async {
         let backend = ScriptedBackend()
         backend.responses = [
@@ -236,5 +248,19 @@ final class AgentGatewayServiceTests: XCTestCase {
             }
         }
         XCTAssertEqual(try? result.get().presentation.speech, "直接回答你")
+    }
+
+    func testRunSingleTurnWithoutBackendFailsImmediately() async {
+        let backend = ScriptedBackend()
+        let service = makeService(backend)
+
+        let result = await withCheckedContinuation { continuation in
+            service.runSingleTurn("今天多少度", brain: .none) { result in
+                continuation.resume(returning: result)
+            }
+        }
+
+        XCTAssertEqual(result, .failure(.backendUnavailable))
+        XCTAssertTrue(backend.prompts.isEmpty)
     }
 }

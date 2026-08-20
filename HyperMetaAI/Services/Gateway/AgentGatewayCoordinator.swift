@@ -1,6 +1,7 @@
 /*
  * Agent Gateway Coordinator
- * 对齐 qwen-audio-agent v1.8.3 server/src/agent/coordinator.mjs 的协调协议：
+ * 兼容 qwen-audio-agent v1.10.1；协调结构源自 v1.8.3
+ * server/src/agent/coordinator.mjs：
  *   - qwen_audio_agent_protocol JSON 载荷解析（围栏剥离 + 花括号窗口回退）
  *   - 最终决策解析（presentation.speech / inline 规范化）
  *   - 协调提示词组装（记忆 / 会话上下文 / 活动任务 / 时区 / 重试说明）
@@ -213,7 +214,7 @@ enum AgentGatewayCoordinatorPromptBuilder {
         return lines.isEmpty ? "- 无" : lines.joined(separator: "\n")
     }
 
-    /// 组装协调请求提示词（结构对齐 v1.8.3 coordinator.mjs）
+    /// 组装协调请求提示词（结构兼容 v1.10.1 coordinator.mjs）
     static func build(
         originalRequest: String,
         objective: String,

@@ -99,15 +99,9 @@ struct AgentSettingsView: View {
     @State private var showBriefingPreview = false
     @State private var briefingPreviewText = ""
 
-    // Qwen Gateway fields
-    @State private var qwenHost = ""
-    @State private var qwenPortText = ""
-    @State private var qwenSession = ""
-    @State private var qwenUsesTLS = false
-    @State private var qwenMode: QwenGatewayMode = QwenGatewayService.shared.mode
+    // Qwen Gateway：表单由 QwenGatewayConfigurationSections 渲染，这里只持有草稿与保存反馈
+    @State private var qwenDraft = QwenGatewayDraft()
     @State private var qwenSaved = false
-    @State private var showQwenAPIKeySettings = false
-    @State private var visionInjectionEnabled = AgentVisionSettings.injectionEnabled
     @State private var visionFollowUpEnabled = AgentVisionSettings.followUpEnabled
     @State private var brainDefault = AgentBrainSettings.selected
     @State private var askResultNotifyEnabled = AgentAskResultSettings.enabled()
@@ -840,19 +834,14 @@ struct AgentSettingsView: View {
                 }
 
                 Section {
-                    Toggle("agent.vision.injection.toggle".localized, isOn: $visionInjectionEnabled)
-                        .onChange(of: visionInjectionEnabled) { _, newValue in
-                            AgentVisionSettings.injectionEnabled = newValue
-                        }
+                    // 视野注入总开关在设置页的「眼镜」分组里，那里离设备状态更近。
+                    // 这里只保留它的子选项：连续追问。
                     Toggle("agent.vision.followup.toggle".localized, isOn: $visionFollowUpEnabled)
                         .onChange(of: visionFollowUpEnabled) { _, newValue in
                             AgentVisionSettings.followUpEnabled = newValue
                         }
                 } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("agent.vision.injection.footer".localized)
-                        Text("agent.vision.followup.footer".localized)
-                    }
+                    Text("agent.vision.followup.footer".localized)
                 }
 
                 Section {
@@ -883,7 +872,7 @@ struct AgentSettingsView: View {
                             Text(brain.displayName).tag(brain)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .onChange(of: brainDefault) { _, newValue in
                         AgentBrainSettings.selected = newValue
                     }
@@ -1101,72 +1090,7 @@ struct AgentSettingsView: View {
                     Text("agent.routing.footer".localized)
                 }
 
-                Section {
-                    Picker("qwen.settings.mode".localized, selection: $qwenMode) {
-                        ForEach(QwenGatewayMode.allCases) { option in
-                            Text(option.displayNameKey.localized).tag(option)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-
-                    if qwenMode == .builtIn {
-                        LabeledContent {
-                            Text(qwenGateway.isBuiltInAPIKeyConfigured
-                                ? "qwen.settings.api.configured".localized
-                                : "qwen.settings.api.missing".localized)
-                                .foregroundStyle(qwenGateway.isBuiltInAPIKeyConfigured ? .green : .orange)
-                        } label: {
-                            Text("qwen.settings.api.status".localized)
-                        }
-
-                        Button {
-                            showQwenAPIKeySettings = true
-                        } label: {
-                            Label("settings.apikey.manage".localized, systemImage: "key.fill")
-                        }
-                    }
-                } header: {
-                    Text("qwen.settings.section".localized)
-                } footer: {
-                    Text(qwenMode == .builtIn
-                        ? "qwen.settings.mode.builtin.footer".localized
-                        : "qwen.settings.mode.external.footer".localized)
-                }
-
-                if qwenMode == .external {
-                Section {
-                    HStack {
-                        Text("agent.form.host".localized)
-                            .frame(width: 50, alignment: .leading)
-                        TextField("127.0.0.1", text: $qwenHost)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                    }
-
-                    HStack {
-                        Text("agent.form.port".localized)
-                            .frame(width: 50, alignment: .leading)
-                        TextField("3101", text: $qwenPortText)
-                            .keyboardType(.numberPad)
-                    }
-
-                    HStack {
-                        Text("agent.form.session".localized)
-                            .frame(width: 50, alignment: .leading)
-                        TextField("main", text: $qwenSession)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                    }
-
-                    Toggle("Use TLS", isOn: $qwenUsesTLS)
-
-                } header: {
-                    Text("qwen.settings.external.section".localized)
-                } footer: {
-                    Text("qwen.settings.footer".localized)
-                }
-                }
+                QwenGatewayConfigurationSections(draft: $qwenDraft)
 
                 Section {
                     Button {
@@ -1178,7 +1102,7 @@ struct AgentSettingsView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .disabled(qwenMode == .external && qwenHost.isEmpty)
+                    .disabled(!qwenDraft.isSavable)
                 }
 
                 switch selectedKind {
@@ -1210,11 +1134,7 @@ struct AgentSettingsView: View {
                 hermesConversation = hermesService.conversationName
                 hermesUsesTLS = hermesService.usesTLS
 
-                qwenMode = qwenGateway.mode
-                qwenHost = qwenGateway.gatewayHost
-                qwenPortText = "\(qwenGateway.gatewayPort)"
-                qwenSession = qwenGateway.sessionName
-                qwenUsesTLS = qwenGateway.usesTLS
+                qwenDraft = .loaded(from: qwenGateway)
                 scrollToInitialSectionIfNeeded(proxy)
             }
             }
@@ -1224,12 +1144,6 @@ struct AgentSettingsView: View {
                         Task { await loadCalendarOverview() }
                     }
                 }
-            }
-            .sheet(isPresented: $showQwenAPIKeySettings) {
-                APIKeySettingsView(
-                    provider: .alibaba,
-                    endpoint: APIProviderManager.staticAlibabaEndpoint
-                )
             }
         }
     }
@@ -1339,12 +1253,7 @@ struct AgentSettingsView: View {
     }
 
     private func saveQwenSettings() {
-        qwenGateway.mode = qwenMode
-        qwenGateway.gatewayHost = qwenHost
-        qwenGateway.gatewayPort = Int(qwenPortText) ?? 3101
-        qwenGateway.sessionName = qwenSession.isEmpty ? "main" : qwenSession
-        qwenGateway.usesTLS = qwenUsesTLS
-        qwenGateway.saveSettings()
+        qwenDraft.apply(to: qwenGateway)
         qwenSaved = true
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)

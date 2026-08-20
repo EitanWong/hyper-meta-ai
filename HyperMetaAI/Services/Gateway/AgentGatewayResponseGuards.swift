@@ -1,6 +1,6 @@
 /*
  * Agent Gateway Response Guards
- * 对齐 qwen-audio-agent v1.8.3 server/src/voice/response-guards/ 与
+ * 兼容 qwen-audio-agent v1.10.1 server/src/voice/response-guards/ 与
  * server/src/voice/response-lifecycle.mjs：
  *   - action-promise：识别模型「明确承诺执行但未调用工具」的短句并纠偏
  *   - response lifecycle：识别实时协议中证明存在响应的活动事件

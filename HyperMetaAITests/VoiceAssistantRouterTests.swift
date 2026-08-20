@@ -71,6 +71,17 @@ final class VoiceAssistantRouterTests: XCTestCase {
     XCTAssertFalse(VoiceAssistantRouter.shared.isVoiceSessionRequested)
   }
 
+  func testIntentCanExplicitlyDisableBackendAgent() async throws {
+    var intent = VoiceAssistantAppIntent()
+    intent.brain = .none
+    intent.instruction = "只用语音前台回答"
+
+    _ = try await intent.perform()
+
+    XCTAssertEqual(VoiceAssistantRouter.shared.pendingRequest?.brain, .none)
+    XCTAssertEqual(VoiceAssistantRouter.shared.pendingRequest?.instruction, "只用语音前台回答")
+  }
+
   func testIntentWithoutParametersKeepsDefaults() async throws {
     let intent = VoiceAssistantAppIntent()
     _ = try await intent.perform()

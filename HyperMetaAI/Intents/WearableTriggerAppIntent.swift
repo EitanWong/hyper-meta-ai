@@ -17,6 +17,7 @@ enum AgentWearableTriggerOption: String, AppEnum {
     case resume
     case endTurn
     case captureVision
+    case captureButton
     case repeatLastReply
 
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "JARVIS 动作")
@@ -28,6 +29,7 @@ enum AgentWearableTriggerOption: String, AppEnum {
             .resume: "恢复聆听",
             .endTurn: "结束回合",
             .captureVision: "拍照识图",
+            .captureButton: "眼镜快门",
             .repeatLastReply: "重听回复"
         ]
     }
@@ -39,6 +41,7 @@ enum AgentWearableTriggerOption: String, AppEnum {
         case .resume: return .resume
         case .endTurn: return .endTurn
         case .captureVision: return .captureVision
+        case .captureButton: return .captureButton
         case .repeatLastReply: return .repeatLastReply
         }
     }
